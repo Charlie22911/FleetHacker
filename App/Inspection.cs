@@ -18,24 +18,46 @@ namespace MediaReviewer {
             top.Children.Add(Label("Reviewer"));top.Children.Add(reviewer);top.Children.Add(Label("Notes"));top.Children.Add(notes);
             var feedback=Label("");var actions=Bar();
             Dock(panel,actions,System.Windows.Controls.Dock.Bottom);Dock(panel,feedback,System.Windows.Controls.Dock.Bottom);
+            var locationPanel=new DockPanel();
+            var locationStatus=Label("Loading recorded locations…");Dock(locationPanel,locationStatus,System.Windows.Controls.Dock.Top);
             var locations=new ListView();
-            locations.View=new GridView {Columns={new GridViewColumn {Header="Recorded relative path",Width=480,DisplayMemberBinding=new System.Windows.Data.Binding("Path")},
-                new GridViewColumn {Header="Bytes",Width=95,DisplayMemberBinding=new System.Windows.Data.Binding("Size")},
-                new GridViewColumn {Header="Historical",Width=75,DisplayMemberBinding=new System.Windows.Data.Binding("Historical")}}};
-            panel.Children.Add(locations);
-            bool live=true;window.Closed+=(s,e)=>live=false;
+            var locationStyle=new Style(typeof(ListViewItem));
+            locationStyle.Setters.Add(new Setter(FrameworkElement.ToolTipProperty,new System.Windows.Data.Binding("FullPath")));
+            locations.ItemContainerStyle=locationStyle;
+            locations.View=new GridView {Columns={
+                new GridViewColumn {Header="Recorded relative path",Width=280,DisplayMemberBinding=new System.Windows.Data.Binding("Path")},
+                new GridViewColumn {Header="Source root",Width=238,DisplayMemberBinding=new System.Windows.Data.Binding("RootPath")},
+                new GridViewColumn {Header="Bytes",Width=74,DisplayMemberBinding=new System.Windows.Data.Binding("Size")},
+                new GridViewColumn {Header="Card",Width=90,DisplayMemberBinding=new System.Windows.Data.Binding("CardLabel")},
+                new GridViewColumn {Header="Historical",Width=76,DisplayMemberBinding=new System.Windows.Data.Binding("Historical")}}};
+            locationPanel.Children.Add(locations);panel.Children.Add(locationPanel);
+            bool live=true;
+            var catalog=engine;
             InspectorData current=null;string cursor="",nextCursor="";Button save=null,next=null,previous=null;
             var history=new Stack<string>();var generation=new ViewGeneration();
-            bool saving=false;
+            bool saving=false,locationsLoading=false;
+            long locationRevision=-1;
             Action loadLocations=()=>{
+                long requestedRevision=catalog.Status.Revision;
+                string request=catalog.RequestLocations(row.GroupId,cursor);
+                locationsLoading=true;locationRevision=requestedRevision;
                 next.IsEnabled=previous.IsEnabled=false;long version=generation.Advance();
-                Queue(engine.RequestLocations(row.GroupId,cursor),r=>{
+                Queue(request,r=>{
                     if(!live || !generation.Accept(version))return;
+                    locationsLoading=false;
                     previous.IsEnabled=history.Count>0;
-                    if(!r.Success){feedback.Text=r.Error;return;}
+                    if(!r.Success){locationStatus.Text=r.Error;return;}
                     locations.ItemsSource=r.Locations.Rows;nextCursor=r.Locations.NextAfter;next.IsEnabled=r.Locations.HasMore;
+                    locationStatus.Text="Recorded locations · "+r.Locations.Rows.Count+" shown"+(r.Locations.HasMore ? " · more on the next page" : "");
                 });
             };
+            var refreshLocations=new DispatcherTimer(DispatcherPriority.Background,window.Dispatcher){Interval=TimeSpan.FromMilliseconds(750)};
+            refreshLocations.Tick+=(s,e)=>{
+                if(!Ready || engine!=catalog || current==null || locationsLoading)return;
+                var snapshot=catalog.Status;
+                if(!snapshot.RunningScan && snapshot.Revision!=locationRevision)Guard(loadLocations);
+            };
+            window.Closed+=(s,e)=>{live=false;refreshLocations.Stop();};
             Func<bool> dirty=()=>current!=null && (reviewer.Text!=current.Reviewer || notes.Text!=current.Notes);
             var detailsVersion=new ViewGeneration();
             Action<bool> load=keepDraft=>{
@@ -76,7 +98,7 @@ namespace MediaReviewer {
                     MediaRow other=cards[target].Record;window.Close();Details(other);
                 })));
             }
-            TrackDatabaseWindow(window);window.Show();load(false);
+            TrackDatabaseWindow(window);window.Show();load(false);refreshLocations.Start();
         }
 
         void Inspect(MediaRow row) {

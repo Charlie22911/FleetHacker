@@ -11,6 +11,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 
 namespace MediaReviewer {
     static class Smoke {
@@ -92,6 +93,7 @@ namespace MediaReviewer {
             Check(list!=null && list.IsVisible && list.Items.Count>0,"The desktop must open in the paged review list.");
             var first=(CardItem)list.Items[0];list.SelectedItem=first;
             Check(first.IsSelected && ((Button)window.FindName("CompliantButton")).IsEnabled,"The list selection must drive the existing review controls.");
+            CheckLocationsAfterRescan(window,first.Record,Path.Combine(Path.GetDirectoryName(snapshot),"replacement"));
             var item=(ListViewItem)list.ItemContainerGenerator.ContainerFromItem(first);
             list.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,Environment.TickCount,MouseButton.Left){RoutedEvent=Control.MouseDoubleClickEvent,Source=item});
             var inspection=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title.StartsWith("Inspect · "));
@@ -120,6 +122,38 @@ namespace MediaReviewer {
                 ReviewerWindow.QuickReviewDrag(15,-85,500,250)==Key.Up && ReviewerWindow.QuickReviewDrag(15,85,500,250)==Key.Down &&
                 ReviewerWindow.QuickReviewDrag(150,140,500,250)==Key.None && ReviewerWindow.QuickReviewDrag(0,10,500,250)==Key.None,
                 "Quick Review drags must recognize each direction and ignore short or diagonal movement.");
+        }
+        static void CheckLocationsAfterRescan(Window window,MediaRow row,string fixtureRoot) {
+            string original=Path.Combine(fixtureRoot,"example.user","test.png");
+            Check(String.Equals(original,row.SourcePath,StringComparison.OrdinalIgnoreCase),"Expected the generated rescan fixture.");
+            var source=(TextBox)window.FindName("SourceBox");
+            string previousSource=source.Text;
+            ((Button)window.FindName("PaneDetailsButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var details=window.OwnedWindows.OfType<Window>().Single(w=>w.Title=="Item details and notes");
+            try {
+                var body=(DockPanel)details.Content;
+                var locations=body.Children.OfType<DockPanel>().Single().Children.OfType<ListView>().Single();
+                var notes=body.Children.OfType<StackPanel>().Single().Children.OfType<TextBox>().Last();
+                WaitForWindow(()=>locations.Items.Count==1);
+                notes.Text="Unsaved notes during rescan";
+                string copy=Path.Combine(fixtureRoot,"example.user","rescan-copy.png");
+                File.Copy(original,copy);
+                source.Text=fixtureRoot;
+                ((Button)window.FindName("StartButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                WaitForWindow(()=>locations.Items.Count==2);
+                Check(locations.Items.OfType<LocationRow>().Any(location=>location.FullPath==copy && !location.OtherCard),
+                    "The open details window did not show the new same-root copy.");
+                Check(notes.Text=="Unsaved notes during rescan","Refreshing locations must preserve an unsaved notes draft.");
+            } finally {details.Close();source.Text=previousSource;}
+        }
+        static void WaitForWindow(Func<bool> condition) {
+            var frame=new DispatcherFrame();
+            var elapsed=Stopwatch.StartNew();
+            var timer=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(50)};
+            timer.Tick+=(s,e)=>{if(condition() || elapsed.Elapsed>TimeSpan.FromSeconds(12))frame.Continue=false;};
+            timer.Start();
+            try{Dispatcher.PushFrame(frame);}finally{timer.Stop();}
+            Check(condition(),"Timed out waiting for Item details to refresh recorded locations.");
         }
         static void CheckCommandSections(Window window) {
             CheckVideoLifecycle();
@@ -307,7 +341,32 @@ namespace MediaReviewer {
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4})).Page.Total==2,"The Quick Review navigation fixture is incomplete.");
             }
             CheckRenamed(directory,image);
-            Console.WriteLine("Embedded SQLite, scan, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;
+            CheckCrossRootCopies(directory,image);
+            Console.WriteLine("Embedded SQLite, scan, duplicate locations, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;
+        }
+        static void CheckCrossRootCopies(string directory,string image) {
+            string first=Path.Combine(directory,"duplicate-source");
+            string second=Path.Combine(directory,"duplicate-copy");
+            foreach(string root in new[]{first,second}){
+                string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
+                File.Copy(image,Path.Combine(folder,"test.png"));
+            }
+            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"duplicates.sqlite"),true)){
+                Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                engine.StartScan(new ScanOptions {RootPath=first,Extensions=new[]{"png"},WorkerCount=1});
+                Wait(()=>!engine.Status.RunningScan);
+                var original=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page.Rows.Single();
+                engine.StartScan(new ScanOptions {RootPath=second,Extensions=new[]{"png"},WorkerCount=1});
+                Wait(()=>!engine.Status.RunningScan);
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=2})).Page.Total==2,
+                    "Listing exact copies must preserve separate review cards.");
+                var page=Result(engine,engine.RequestLocations(original.GroupId,"",1)).Locations;
+                Check(page.HasMore,"A second root with identical content must appear in Details.");
+                var next=Result(engine,engine.RequestLocations(original.GroupId,page.NextAfter,1)).Locations;
+                var locations=page.Rows.Concat(next.Rows).ToArray();
+                Check(!next.HasMore && locations.Single(x=>!x.OtherCard).RootPath==first &&
+                    locations.Single(x=>x.OtherCard).RootPath==second,"Each exact match must show its own source root.");
+            }
         }
         static void CheckRenamed(string directory,string image) {
             string root=Directory.CreateDirectory(Path.Combine(directory,"renamed-root")).FullName;
