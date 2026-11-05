@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <PlatformTarget>x64</PlatformTarget>
+    <UseWPF>true</UseWPF>
+    <EnableDefaultPageItems>false</EnableDefaultPageItems>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <GenerateTargetFrameworkAttribute>false</GenerateTargetFrameworkAttribute>
+    <AssemblyName>Application</AssemblyName>
+    <DefaultItemExcludes>$(DefaultItemExcludes);.build/**;dist/**</DefaultItemExcludes>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.Windows.Forms" />
+    <EmbeddedResource Include="App/MainWindow.xaml" LogicalName="MainWindow.xaml" />
+    <EmbeddedResource Include="native/reviewer.ico" LogicalName="Reviewer.ico" />
+    <EmbeddedResource Include="native/COPYING.LGPLv2.1" LogicalName="COPYING.LGPLv2.1" />
+    <EmbeddedResource Include="native/COPYING.dav1d" LogicalName="COPYING.dav1d" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,119 @@
+using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Threading;
+using System.Windows;
+using System.Windows.Markup;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+
+[assembly:System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.7.2")]
+[assembly:AssemblyTitle("Media Compliance Reviewer for Windows")]
+[assembly:AssemblyCompany("IT1 Charlie McPherson")]
+
+namespace MediaReviewer {
+    static class Program {
+        [DllImport("kernel32.dll")] static extern IntPtr GetCommandLineW();
+        [DllImport("shell32.dll")] static extern IntPtr CommandLineToArgvW(IntPtr command,out int count);
+        [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr pointer);
+
+        static string[] Arguments() {
+            int count;IntPtr args=CommandLineToArgvW(GetCommandLineW(),out count);
+            if(args==IntPtr.Zero)throw new System.ComponentModel.Win32Exception();
+            try {return Enumerable.Range(1,count-1).Select(i=>Marshal.PtrToStringUni(Marshal.ReadIntPtr(args,i*IntPtr.Size))).ToArray();}
+            finally{LocalFree(args);}
+        }
+
+        internal static Window ReadWindow() {
+            var assembly=Assembly.GetExecutingAssembly();
+            Window window;
+            using(var markup=assembly.GetManifestResourceStream("MainWindow.xaml"))window=(Window)XamlReader.Load(markup);
+            using(var icon=assembly.GetManifestResourceStream("Reviewer.ico")) {
+                var frames=new IconBitmapDecoder(icon,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad).Frames;
+                window.Icon=frames.FirstOrDefault(f=>f.PixelWidth==32)??frames[0];
+            }
+            return window;
+        }
+
+        [STAThread] static int Main() {
+            AppContext.SetSwitch("Switch.System.IO.UseLegacyPathHandling",false);
+            AppContext.SetSwitch("Switch.System.IO.BlockLongPaths",false);
+            return Run();
+        }
+
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        static int Run() {
+            string[] args=Arguments();
+            string mode=args.FirstOrDefault();
+            bool headless=CommandLine.IsHeadless(args);
+            string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
+            try {
+                if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
+                Native.Initialize(scratch);
+                if(mode=="--preview-worker")return DecoderProgram.Run();
+                if(headless)return CommandLine.Run(args);
+                if(mode=="--self-test" && args.Length==2)return Smoke.Run(args[1]);
+                if(mode=="--verify-previews" && args.Length>=2)return Smoke.PreviewFiles(args.Skip(1));
+                if(mode=="--verify-import" && args.Length==3)return Smoke.Import(args[1],args[2]);
+                if(mode!=null && mode!="--window-smoke" && ((mode!="--database" && mode!="--open-evidence-package") || args.Length!=2))throw new ArgumentException("Use --database with a local SQLite path, --open-evidence-package with a package path, or launch without arguments.");
+                var app=new Application();
+                using(var controller=new ReviewerWindow(ReadWindow(),mode!="--window-smoke")) {
+                    if(mode==null)controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>controller.ShowStartupCatalog()));
+                    if(mode=="--database")controller.Open(args[1],false);
+                    if(mode=="--open-evidence-package")controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>{
+                        try{controller.OpenPackage(args[1]);}catch(Exception error){MessageBox.Show(controller.Window,error.Message,"Could not open Evidence package");}
+                        finally{controller.Window.Close();}
+                    }));
+                    if(mode=="--window-smoke") {
+                        if(args.Length!=2)throw new ArgumentException("Window smoke test needs a fixture database.");
+                        controller.Window.Width=1024;controller.Window.Height=768;
+                        controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>{
+                            try{controller.ShowStartupCatalog(Smoke.CheckStartupPrompt);controller.Open(args[1],false);}
+                            catch(Exception error){Console.Error.WriteLine(error);controller.Window.Close();}
+                        }));
+                        var timer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
+                        var elapsed=System.Diagnostics.Stopwatch.StartNew();
+                        bool rendered=false,reviewStarted=false;
+                        timer.Tick+=(s,e)=>{
+                            if(reviewStarted) {
+                                var message=((System.Windows.Controls.TextBlock)controller.Window.FindName("MessageText")).Text;
+                                if(message!="Review saved." && elapsed.Elapsed<TimeSpan.FromSeconds(12))return;
+                                timer.Stop();rendered=message=="Review saved.";
+                                if(!rendered)Console.Error.WriteLine("Quick Review did not commit: "+message);
+                                controller.Window.Close();return;
+                            }
+                            if(!controller.HasRenderedPreview && elapsed.Elapsed<TimeSpan.FromSeconds(12))return;
+                            rendered=controller.HasRenderedPreview;timer.Stop();
+                            try{if(rendered){
+                                string output=Path.GetDirectoryName(args[1]);
+                                Smoke.CheckShell(controller.Window,Path.Combine(output,"gallery.png"));
+                                controller.Window.Width=1280;controller.Window.UpdateLayout();
+                                if(controller.Window.ActualWidth>=1160) {
+                                    Smoke.CheckWideShell(controller.Window);
+                                    Smoke.SaveGallery(controller.Window,Path.Combine(output,"workspace-dark.png"));
+                                }
+                                Smoke.SaveQuickReviewWithArrow(controller.Window);
+                                reviewStarted=true;elapsed.Restart();timer.Start();return;
+                            }}
+                            catch(Exception error){rendered=false;Console.Error.WriteLine(error);}
+                            controller.Window.Close();
+                        };
+                        timer.Start();app.Run(controller.Window);return rendered ? 0 : 1;
+                    }
+                    return app.Run(controller.Window);
+                }
+            }catch(Exception error) {
+                if(headless || mode=="--self-test" || mode=="--window-smoke" || mode=="--preview-worker" || mode=="--verify-previews" || mode=="--verify-import")Console.Error.WriteLine(error);
+                else MessageBox.Show(error.GetBaseException().Message,"Media Compliance Reviewer could not start",MessageBoxButton.OK,MessageBoxImage.Error);
+                return 1;
+            }finally {
+                if(mode!="--preview-worker") {
+                    Preview.Shutdown();
+                    try {if(Directory.Exists(scratch))Directory.Delete(scratch,false);}catch(IOException){}catch(UnauthorizedAccessException){}
+                }
+            }
+        }
+    }
+}
