@@ -16,7 +16,8 @@ namespace MediaReviewer {
         public string Id {get;set;}public string Path {get;set;}public string RootPath {get;set;}
         public long Size {get;set;}public long ModifiedTicks {get;set;}public bool Historical {get;set;}
         public bool OtherCard {get;set;}
-        public string CardLabel {get{return OtherCard ? "Exact match" : "This item";}}
+        public bool Sampled {get;set;}
+        public string CardLabel {get{return !OtherCard ? "This item" : Sampled ? "Candidate" : "Exact match";}}
         public string FullPath {get{return RootPath.TrimEnd('\\')+"\\"+Path;}}
         internal long Cost {get{return 128+2L*(Id.Length+Path.Length+RootPath.Length);}}
     }
@@ -49,11 +50,13 @@ namespace MediaReviewer {
         internal static LocationPage Locations(SqliteConnection db,long group,string after,int limit) {
             db.Execute("BEGIN");try{
                 var groups=db.Query(@"SELECT g.content_id,
- CASE WHEN c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND g.status<>'EVIDENCE' THEN g.content_id END
+ CASE WHEN g.status<>'EVIDENCE' AND c.algorithm_version=1 AND
+ ((c.algorithm='sha256' AND c.sampling='') OR c.algorithm='sampled-sha256-v1') THEN g.content_id END,
+ c.algorithm='sampled-sha256-v1'
  FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1);
                 if(groups.Count==0)throw new InvalidOperationException("This item was replaced or removed; reload the gallery.");
                 var page=new LocationPage {GroupId=group,ContentId=(long)groups[0][0]};long cost=512;
-                // Include exact matches on other ordinary cards without merging their reviews.
+                // Include the same fingerprint on other ordinary cards without merging their reviews.
                 using(var statement=db.Prepare(@"SELECT substr(CAST(o.id AS BLOB),1,393217),substr(CAST(o.path AS BLOB),1,98302),
  o.size,o.modified_ticks,o.superseded,substr(r.path,1,32768),MIN(o.group_id<>?1)
  FROM group_occurrences o JOIN source_roots r ON r.id=o.root_id
@@ -63,7 +66,7 @@ namespace MediaReviewer {
  GROUP BY o.id COLLATE BINARY ORDER BY o.id COLLATE BINARY LIMIT ?4")){
                     statement.Bind(group,groups[0][1],after,limit+1);while(statement.Step()){
                         var idBytes=(byte[])statement.Value(0)??new byte[0];var pathBytes=(byte[])statement.Value(1)??new byte[0];if(idBytes.Length>393216 || pathBytes.Length>98301)throw new InvalidOperationException("A recorded location exceeds the display limit; its original data is preserved.");
-                        var row=new LocationRow {Id=ReviewUtf8.GetString(idBytes),Path=ReviewUtf8.GetString(pathBytes),Size=(long)statement.Value(2),ModifiedTicks=(long)statement.Value(3),Historical=(long)statement.Value(4)!=0,RootPath=(string)statement.Value(5),OtherCard=(long)statement.Value(6)!=0};
+                        var row=new LocationRow {Id=ReviewUtf8.GetString(idBytes),Path=ReviewUtf8.GetString(pathBytes),Size=(long)statement.Value(2),ModifiedTicks=(long)statement.Value(3),Historical=(long)statement.Value(4)!=0,RootPath=(string)statement.Value(5),OtherCard=(long)statement.Value(6)!=0,Sampled=(long)groups[0][2]!=0};
                         if(row.Id.Length>131072 || row.Path.Length>32767)throw new InvalidOperationException("A recorded location exceeds the display limit; its original data is preserved.");
                         if(page.Rows.Count==limit || cost+row.Cost+row.Id.Length*2L>2*1024*1024){page.HasMore=true;break;}
                         page.Rows.Add(row);cost+=row.Cost;page.NextAfter=row.Id;

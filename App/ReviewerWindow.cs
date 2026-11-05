@@ -268,7 +268,7 @@ namespace MediaReviewer {
         }
         void CardChanged(object sender,PropertyChangedEventArgs e){if((e.PropertyName=="IsSelected" || e.PropertyName=="CanSelect") && !selection.Updating)UpdateControls();}
         void CardClick(object sender,RoutedEventArgs e) {
-            var button=e.Source as Button;var card=button==null ? null : button.DataContext as CardItem;
+            var button=e.OriginalSource as Button;var card=button==null ? null : button.DataContext as CardItem;
             if(card==null || !Ready)return;
             if(button.Name=="CardDetailsButton")Guard(()=>Details(card.Record));
             if(button.Name=="CardInspectButton")Guard(()=>Inspect(card.Record));

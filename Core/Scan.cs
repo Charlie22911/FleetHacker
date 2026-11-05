@@ -226,7 +226,7 @@ namespace MediaReviewer {
                             var sniff=options.SniffRenamed && !Formats.Supported(item.Extension) ? options.Extensions : null;
                             record=archive ? Archives.Fingerprint(Full(job.Path),item,buffer,cancellation.Token,progress,options.CutoffUtcTicks,options.RootPath,job.Signature)
                                 : FileAccessNative.FingerprintScoped(Full(job.Path),item,buffer,cancellation.Token,progress,options.CutoffUtcTicks,job.RequiresFull ? MediaReviewer.FingerprintPolicy.Full() : options.FingerprintPolicy,options.RootPath,sniff);
-                            if(record!=null)record=MatchReviewed(record,buffer);
+                            if(record!=null)record=MatchCatalogIdentity(record,buffer);
                         },"Fingerprinting",Full(job.Path),job);
                         if(record==null) Finish(job,"skipped",null); else {
                             prepared.Add(record,record.RelativePath.Length*2+512,cancellation.Token);

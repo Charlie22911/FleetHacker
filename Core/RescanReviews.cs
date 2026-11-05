@@ -15,10 +15,10 @@ namespace MediaReviewer {
  AND NOT EXISTS(SELECT 1 FROM review_group_redirects WHERE target_group=g.id)
  AND NOT EXISTS(SELECT 1 FROM original_targets WHERE group_id=g.id)
  AND NOT EXISTS(SELECT 1 FROM evidence_items WHERE decision_key=g.legacy_key) AND NOT EXISTS(SELECT 1 FROM evidence_manifests WHERE decision_key=g.legacy_key)";
-        internal static void RetireReplacedCandidates(SqliteConnection db,long canonical,string root,string pathKey,long content){
-            if(db.Scalar("SELECT 1 FROM review_groups WHERE id=? AND status<>'TO_REVIEW' AND retired=0",canonical)==null)return;
-            foreach(var row in db.Query("SELECT g.id FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.root_id=? AND g.content_id<>? AND c.algorithm='sampled-sha256-v1' AND "+UntouchedReview+" AND EXISTS(SELECT 1 FROM occurrences o WHERE o.root_id=g.root_id AND o.content_id=g.content_id AND o.path_key=? AND o.superseded=1) AND NOT EXISTS(SELECT 1 FROM group_occurrences active WHERE active.group_id=g.id AND active.superseded=0) LIMIT 16",new object[]{root,content,pathKey},16)){
-                db.Execute("UPDATE review_groups SET retired=1 WHERE id=?",row[0]);Log(db,"info","Rescan duplicate retired",pathKey,"Untouched candidate group "+row[0]+" has been replaced by fully verified locations on reviewed group "+canonical+". Its history is retained.");
+        internal static void RetireReplacedCandidates(SqliteConnection db,long canonical,string root,string pathKey,long content,string verifiedSample){
+            if(db.Scalar("SELECT 1 FROM review_groups WHERE id=? AND retired=0 AND (status<>'TO_REVIEW' OR ? IS NOT NULL)",canonical,verifiedSample)==null)return;
+            foreach(var row in db.Query("SELECT g.id FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.root_id=? AND g.content_id<>? AND c.algorithm='sampled-sha256-v1' AND (? IS NULL OR c.legacy_hash=?) AND "+UntouchedReview+" AND EXISTS(SELECT 1 FROM occurrences o WHERE o.root_id=g.root_id AND o.content_id=g.content_id AND o.path_key=? AND o.superseded=1) AND NOT EXISTS(SELECT 1 FROM group_occurrences active WHERE active.group_id=g.id AND active.superseded=0) LIMIT 16",new object[]{root,content,verifiedSample,verifiedSample,pathKey},16)){
+                db.Execute("UPDATE review_groups SET retired=1 WHERE id=?",row[0]);Log(db,"info","Rescan duplicate retired",pathKey,"Untouched candidate group "+row[0]+" has been replaced by fully verified locations on group "+canonical+". Its history is retained.");
             }
         }
         internal static long ReuseReviewed(SqliteConnection db,long local,long content,string root,string path){
@@ -45,18 +45,35 @@ namespace MediaReviewer {
             else sql+=" AND ?3 IS NOT NULL AND ?4 IS NOT NULL";
             return sql+" ORDER BY g.display_sequence LIMIT 9";
         }
-        FileRecord MatchReviewed(FileRecord record,byte[] buffer){
+        FileRecord MatchCatalogIdentity(FileRecord record,byte[] buffer){
             var token=cancellation.Token;token.ThrowIfCancellationRequested();
             string digest=record.Hash.StartsWith("q2:",StringComparison.Ordinal) ? record.Hash.Substring(3) : record.Hash;
             object[] args={record.Size,id,digest,record.Sampling};
-            bool check=(bool)Write(db=>(object)(db.Scalar("SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND g.retired=0 AND g.status<>'TO_REVIEW' LIMIT 1",record.Size)!=null || db.Query(ReviewedSamples(record),args,9).Count>0));
-            if(!check)return record;
+            bool sampled=record.Algorithm=="sampled-sha256-v1";
+            var check=(Tuple<bool,bool>)Write(db=>{
+                const string fullAtSize="SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND g.retired=0";
+                bool reviews=db.Scalar(fullAtSize+" AND g.status<>'TO_REVIEW' LIMIT 1",record.Size)!=null ||
+                    db.Query(ReviewedSamples(record),args,9).Count>0;
+                bool possibleCopy=!reviews && sampled && db.Scalar(fullAtSize+" LIMIT 1",record.Size)!=null;
+                return Tuple.Create(reviews,possibleCopy);
+            });
+            if(!check.Item1 && !check.Item2)return record;
             FileRecord candidate=record;
-            if(record.Algorithm!="sha256"){
-                engine.Update(s=>s.Stage="Checking full identity against saved reviews: "+record.RelativePath);
+            if(sampled){
+                engine.Update(s=>s.Stage="Checking full identity against the catalog: "+record.RelativePath);
                 var full=new FileRecord {RootId=record.RootId,ScanId=record.ScanId,JobId=record.JobId,UserOrdinal=record.UserOrdinal,RelativePath=record.RelativePath,Name=record.Name,Extension=record.Extension};
                 FileAccessNative.FingerprintScoped(Full(record.RelativePath),full,buffer,token,n=>engine.Update(s=>{s.BytesRead+=n;s.LastProgressUtc=DateTime.UtcNow;}),0,FingerprintPolicy.Full(),options.RootPath);
-                if(full.Size!=record.Size || full.ModifiedTicks!=record.ModifiedTicks || full.FileIdentity!=record.FileIdentity)throw new FileChangedException("Source changed between quick and full review matching; retry must reopen it.");record=full;
+                if(full.Size!=record.Size || full.ModifiedTicks!=record.ModifiedTicks || full.FileIdentity!=record.FileIdentity)throw new FileChangedException("Source changed between quick and full matching; retry must reopen it.");
+                record=full;
+            }
+            if(check.Item2){
+                // Same size only justifies a full read. Preserve the normal scan policy if the digest differs.
+                bool exact=Write(db=>db.Scalar(@"SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id
+ WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND c.digest=? AND g.retired=0 LIMIT 1",
+                    record.Size,record.Hash))!=null;
+                if(!exact)return candidate;
+                record.VerifiedCopySampleHash=candidate.Hash;
+                return record;
             }
             bool entered=false;
             try{

@@ -111,6 +111,17 @@ namespace MediaReviewer {
             toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(((FrameworkElement)window.FindName("GalleryScroll")).Visibility==Visibility.Visible && !list.IsVisible,"Switching to thumbnails must use the same loaded page.");
             Check(first.IsSelected,"Switching the view discarded the selected review item.");
+            window.UpdateLayout();
+            var gallery=(ItemsControl)window.FindName("CardList");
+            var tile=(FrameworkElement)gallery.ItemContainerGenerator.ContainerFromItem(first);
+            foreach(string name in new[]{"CardDetailsButton","CardInspectButton"}){
+                var command=(Button)gallery.ItemTemplate.FindName(name,tile);
+                command.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent,command));
+                string title=name=="CardDetailsButton" ? "Item details and notes" : "Inspect · "+first.Name;
+                var opened=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title==title && w.IsVisible);
+                Check(opened!=null,"Clicking the rendered thumbnail button did not open "+title+".");
+                opened.Close();
+            }
             var theme=(Button)window.FindName("ThemeButton");
             var before=window.FindResource("PageBrush");
             theme.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -342,6 +353,7 @@ namespace MediaReviewer {
             }
             CheckRenamed(directory,image);
             CheckCrossRootCopies(directory,image);
+            CheckMixedFingerprints(directory,image);
             Console.WriteLine("Embedded SQLite, scan, duplicate locations, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;
         }
         static void CheckCrossRootCopies(string directory,string image) {
@@ -351,21 +363,49 @@ namespace MediaReviewer {
                 string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
                 File.Copy(image,Path.Combine(folder,"test.png"));
             }
-            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"duplicates.sqlite"),true)){
+            foreach(bool sampled in new[]{false,true})using(var engine=ReviewerEngine.Open(Path.Combine(directory,sampled ? "duplicate-candidates.sqlite" : "duplicates.sqlite"),true)){
                 Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
-                engine.StartScan(new ScanOptions {RootPath=first,Extensions=new[]{"png"},WorkerCount=1});
+                var policy=sampled ? new FingerprintPolicy {ThresholdBytes=0} : FingerprintPolicy.Full();
+                engine.StartScan(new ScanOptions {RootPath=first,Extensions=new[]{"png"},WorkerCount=1,FingerprintPolicy=policy});
                 Wait(()=>!engine.Status.RunningScan);
                 var original=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page.Rows.Single();
-                engine.StartScan(new ScanOptions {RootPath=second,Extensions=new[]{"png"},WorkerCount=1});
+                engine.StartScan(new ScanOptions {RootPath=second,Extensions=new[]{"png"},WorkerCount=1,FingerprintPolicy=policy});
                 Wait(()=>!engine.Status.RunningScan);
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=2})).Page.Total==2,
                     "Listing exact copies must preserve separate review cards.");
                 var page=Result(engine,engine.RequestLocations(original.GroupId,"",1)).Locations;
-                Check(page.HasMore,"A second root with identical content must appear in Details.");
+                Check(page.HasMore,"A second root with the same fingerprint must appear in Details.");
                 var next=Result(engine,engine.RequestLocations(original.GroupId,page.NextAfter,1)).Locations;
                 var locations=page.Rows.Concat(next.Rows).ToArray();
                 Check(!next.HasMore && locations.Single(x=>!x.OtherCard).RootPath==first &&
                     locations.Single(x=>x.OtherCard).RootPath==second,"Each exact match must show its own source root.");
+                Check(locations.Single(x=>x.OtherCard).CardLabel==(sampled ? "Candidate" : "Exact match"),
+                    "Sampled matches must be distinguished from full-file matches.");
+            }
+        }
+        static void CheckMixedFingerprints(string directory,string image) {
+            string root=Path.Combine(directory,"mixed-fingerprints");
+            string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
+            string original=Path.Combine(folder,"original.png"),copy=Path.Combine(folder,"copy.png");
+            byte[] bytes=File.ReadAllBytes(image);
+            Array.Resize(ref bytes,bytes.Length+1);
+            File.WriteAllBytes(original,bytes);
+            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"mixed-fingerprints.sqlite"),true)){
+                Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                var options=new ScanOptions {RootPath=root,Extensions=new[]{"png"},WorkerCount=1,FingerprintPolicy=FingerprintPolicy.Full()};
+                engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
+                var first=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page.Rows.Single();
+                File.Copy(original,copy);
+                bytes[bytes.Length-1]=1;
+                File.WriteAllBytes(Path.Combine(folder,"different.png"),bytes);
+                options.FingerprintPolicy=new FingerprintPolicy {ThresholdBytes=0};
+                engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
+                var rows=Result(engine,engine.RequestPage(new PageRequest {Generation=2})).Page.Rows;
+                Check(rows.Count==2 && rows.Single(row=>row.GroupId!=first.GroupId).Algorithm=="sampled-sha256-v1",
+                    "A same-size file with a different digest must keep its own sampled fingerprint.");
+                var locations=Result(engine,engine.RequestLocations(first.GroupId,"")).Locations.Rows;
+                Check(locations.Count==2 && locations.Any(row=>row.FullPath==copy),
+                    "A Quick rescan must record a full-verified copy on the existing full fingerprint.");
             }
         }
         static void CheckRenamed(string directory,string image) {

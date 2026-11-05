@@ -7,6 +7,7 @@ namespace MediaReviewer {
         public long Size,ModifiedTicks,JobId,BytesRead;
         public int UserOrdinal,AlgorithmVersion=1;
         public bool ReviewConflict;
+        internal string VerifiedCopySampleHash;
     }
     public sealed class PageRequest {
         public long Generation; public string Bucket="TO_REVIEW",Search="",Folder="",Type="",RootId="",Sort="found";
