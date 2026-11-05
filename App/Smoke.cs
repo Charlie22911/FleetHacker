@@ -17,14 +17,19 @@ namespace MediaReviewer {
         const string FixturePassword="generated test password";
         internal static void CheckStartupPrompt(Window dialog) {
             var buttons=((WrapPanel)((StackPanel)dialog.Content).Children[2]).Children.OfType<Button>().ToArray();
-            Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCreateButton","StartupOpenButton","StartupLaterButton"}),
-                "The startup catalog chooser must offer Create, Open and Later.");
-            dialog.Loaded+=(s,e)=>dialog.Dispatcher.BeginInvoke(new Action(()=>buttons[2].RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
+            Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCatalogButton","StartupLaterButton"}),
+                "The startup prompt must offer one catalog command and Later.");
+            dialog.Loaded+=(s,e)=>dialog.Dispatcher.BeginInvoke(new Action(()=>buttons[1].RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
+        }
+        internal static void CheckCatalogPath(string existing) {
+            string unused=Path.Combine(Path.GetDirectoryName(existing),Guid.NewGuid().ToString("N")+".sqlite");
+            Check(!ReviewerWindow.IsNewCatalogPath(existing) && ReviewerWindow.IsNewCatalogPath(unused),
+                "The combined catalog picker must open an existing path and create only at a new path.");
         }
 
         internal static void CheckSidebarCommands(Window window) {
             var sidebar=(FrameworkElement)window.FindName("QueueSidebar");
-            foreach(string name in new[]{"CreateButton","OpenButton","MaintenanceButton","PreviewTasksButton","LogButton","HelpButton","AboutButton","ThemeButton",
+            foreach(string name in new[]{"CatalogButton","MaintenanceButton","PreviewTasksButton","LogButton","HelpButton","AboutButton","ThemeButton",
                 "ListModeButton","ThumbnailsModeButton","QuickModeButton","RefreshViewButton"})
                 Check(sidebar.IsAncestorOf((Button)window.FindName(name)),"Expected sidebar command: "+name);
         }
@@ -37,6 +42,7 @@ namespace MediaReviewer {
 
         internal static void CheckShell(Window window,string snapshot) {
             CheckSidebarCommands(window);
+            CheckCommandSections(window);
             var list=window.FindName("ReviewList") as ListView;
             var sidebar=window.FindName("QueueSidebar") as FrameworkElement;
             var compact=window.FindName("CompactQueues") as FrameworkElement;
@@ -86,6 +92,18 @@ namespace MediaReviewer {
             Check(list!=null && list.IsVisible && list.Items.Count>0,"The desktop must open in the paged review list.");
             var first=(CardItem)list.Items[0];list.SelectedItem=first;
             Check(first.IsSelected && ((Button)window.FindName("CompliantButton")).IsEnabled,"The list selection must drive the existing review controls.");
+            var item=(ListViewItem)list.ItemContainerGenerator.ContainerFromItem(first);
+            list.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice,Environment.TickCount,MouseButton.Left){RoutedEvent=Control.MouseDoubleClickEvent,Source=item});
+            var inspection=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title.StartsWith("Inspect · "));
+            Check(inspection!=null && inspection.IsVisible && list.IsVisible,"Double-click must open Inspect without changing the gallery view.");
+            string firstTitle=inspection.Title;
+            Check(InspectionArrow(inspection,Key.Right),"Inspect must handle the Right arrow.");
+            inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
+            Check(inspection.Title!=firstTitle && list.IsVisible,"Inspect must show the next item without changing the gallery view.");
+            Check(InspectionArrow(inspection,Key.Left),"Inspect must handle the Left arrow.");
+            inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
+            Check(inspection.Title==firstTitle,"Inspect must return to the previous item.");
+            inspection.Close();
             var toggle=window.FindName("ThumbnailsModeButton") as Button;
             Check(toggle!=null,"The thumbnails view selector is missing.");
             toggle.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -102,6 +120,52 @@ namespace MediaReviewer {
                 ReviewerWindow.QuickReviewDrag(15,-85,500,250)==Key.Up && ReviewerWindow.QuickReviewDrag(15,85,500,250)==Key.Down &&
                 ReviewerWindow.QuickReviewDrag(150,140,500,250)==Key.None && ReviewerWindow.QuickReviewDrag(0,10,500,250)==Key.None,
                 "Quick Review drags must recognize each direction and ignore short or diagonal movement.");
+        }
+        static void CheckCommandSections(Window window) {
+            CheckVideoLifecycle();
+            foreach(string name in new[]{"ScanSettingsExpander","FiltersExpander","ReviewNotesExpander","ReviewToolsExpander"}) {
+                var section=window.FindName(name) as Expander;
+                Check(section!=null && !section.IsExpanded,"Secondary commands must start collapsed: "+name);
+                section.IsExpanded=true;window.UpdateLayout();
+                Check(((FrameworkElement)section.Content).IsVisible,"Expanded commands must remain reachable: "+name);
+                section.IsExpanded=false;
+            }
+            foreach(string name in new[]{"StartButton","ResumeButton","CancelButton","FilterButton","ResetButton","CompliantButton","NonCompliantButton","UnreviewedButton","SelectPageButton"})
+                Check(((Button)window.FindName(name)).IsVisible,"Primary command is hidden: "+name);
+            var notes=(TextBox)window.FindName("NotesBox");
+            var noteSection=(Expander)window.FindName("ReviewNotesExpander");
+            notes.Text="Generated draft";noteSection.IsExpanded=true;noteSection.IsExpanded=false;
+            Check(notes.Text=="Generated draft","Collapsing review notes must preserve the draft.");notes.Text="";
+            foreach(string name in new[]{"FormatsButton","OptionsButton","RetryPreviewsButton","ClearSelectionButton","VerifyButton","IdentityHistoryButton","RetainOriginalsButton","CaptureEvidenceButton","VaultButton","StoredOriginalButton","ExportOriginalButton"})
+                Check(window.FindName(name) is Button,"A secondary command was lost: "+name);
+            window.UpdateLayout();
+            Check(((FrameworkElement)window.FindName("ReviewArea")).ActualHeight>=200,"Compact controls must leave useful review space at 1024x768.");
+        }
+        static void CheckVideoLifecycle() {
+            var viewport=new Grid();viewport.Children.Add(new Image());
+            Action<string,string> complete=null;
+            bool cancelled=false;
+            var player=new VideoPlaybackControls(viewport,callback=>{complete=callback;return ()=>cancelled=true;});
+            var layout=(StackPanel)player.Child;
+            var commands=(WrapPanel)layout.Children[2];
+            var play=(Button)commands.Children[0];var stop=(Button)commands.Children[1];
+            Check(complete==null && viewport.Children.Count==1,"Video must not autoplay on inspection.");
+            play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(complete!=null && !play.IsEnabled && stop.IsEnabled,"Resolving a video must leave Stop available.");
+            var stale=complete;stop.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));stale("C:\\unused-stale-video.mp4",null);
+            Check(cancelled && viewport.Children.Count==1 && play.IsEnabled && !stop.IsEnabled,"A stopped source request must be cancelled and never start playback later.");
+            play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));complete(null,"Generated source unavailable");
+            Check(viewport.Children.Count==1 && play.IsEnabled && ((TextBlock)layout.Children[0]).Text=="Generated source unavailable","A failed source must preserve the poster and allow retry.");
+            player.Prepare();player.Dispose();complete("C:\\unused-closed-video.mp4",null);
+            Check(viewport.Children.Count==1 && !play.IsEnabled,"A closed inspector must reject late video results.");
+        }
+        static bool InspectionArrow(Window window,Key key) {
+            var viewport=(Grid)((DockPanel)window.Content).Children.OfType<Grid>().Single();
+            var arrow=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(viewport),Environment.TickCount,key) {
+                RoutedEvent=Keyboard.PreviewKeyDownEvent
+            };
+            viewport.RaiseEvent(arrow);
+            return arrow.Handled;
         }
         internal static void CheckWideShell(Window window) {
             var sidebar=(FrameworkElement)window.FindName("QueueSidebar");var compact=(FrameworkElement)window.FindName("CompactQueues");
@@ -133,9 +197,16 @@ namespace MediaReviewer {
             QuickArrow(window,Key.Left);
             Check(ReferenceEquals(pane.DataContext,first) && first.CanSelect && next.CanSelect &&
                 first.Record.Status=="TO_REVIEW" && next.Record.Status=="TO_REVIEW","Horizontal browsing must preserve both review decisions.");
-            QuickArrow(window,Key.Up);
+            ((Button)window.FindName("QuickInspectButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            var inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
+            Check(InspectionArrow(inspection,Key.Up),"Inspect must classify with the Up arrow.");
         }
         internal static void MarkQuickNonCompliant(Window window) {
+            var pane=(FrameworkElement)window.FindName("QuickPane");
+            var next=(CardItem)pane.DataContext;
+            var inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
+            Check(next!=null && inspection.Title=="Inspect · "+next.Name,"Inspect must advance after a successful classification.");
+            inspection.Close();
             bool unlocked=false;
             var prompt=window.Dispatcher.BeginInvoke(new Action(()=>{
                 var dialog=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title=="Unlock stored originals" && w.IsVisible);
@@ -154,7 +225,7 @@ namespace MediaReviewer {
             using(var database=new SqliteConnection(path,false)){
                 foreach(string bucket in new[]{"COMPLIANT","NON_COMPLIANT"})
                     Check(Convert.ToInt64(database.Scalar("SELECT COUNT(*) FROM review_groups WHERE retired=0 AND status=?",bucket))==1,
-                        "Quick Review did not save exactly one "+bucket+" decision.");
+                        "The review shortcuts did not save exactly one "+bucket+" decision.");
             }
         }
         static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}

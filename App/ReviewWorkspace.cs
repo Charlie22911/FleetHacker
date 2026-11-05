@@ -63,6 +63,8 @@ namespace MediaReviewer {
         bool columnDescending;
         MediaRow quickSource;
         int quickDecodeSide;
+        MediaRow quickVideoRow;
+        VideoPlaybackControls quickPlayer;
         static string WindowsReviewerLabel(){
             string name=Environment.UserDomainName+"\\"+Environment.UserName;
             return name.Length<=128 ? name : Environment.UserName.Length<=128 ? Environment.UserName : "";
@@ -78,7 +80,7 @@ namespace MediaReviewer {
                 var element=e.OriginalSource as DependencyObject;
                 var item=element==null ? null : ItemsControl.ContainerFromElement(list,element) as ListViewItem;
                 var card=item==null ? null : item.Content as CardItem;
-                if(Ready && card!=null){e.Handled=true;OpenQuick(card);}
+                if(Ready && card!=null){e.Handled=true;Guard(()=>Inspect(card.Record));}
             };
             var gallery=Get<ItemsControl>("CardList");
             gallery.PreviewMouseLeftButtonDown+=(s,e)=>{
@@ -88,7 +90,7 @@ namespace MediaReviewer {
                     if(control is ButtonBase)return;
                 var container=element==null ? null : ItemsControl.ContainerFromElement(gallery,element) as FrameworkElement;
                 var card=container==null ? null : container.DataContext as CardItem;
-                if(card!=null){e.Handled=true;OpenQuick(card);}
+                if(card!=null){e.Handled=true;Guard(()=>Inspect(card.Record));}
             };
             for(int i=0;i<BucketKeys.Length;i++){
                 int index=i;Click("Queue"+i,()=>Combo("ViewBox").SelectedIndex=index);
@@ -152,14 +154,49 @@ namespace MediaReviewer {
         void ResetQuickPreview(){
             if(quickSource!=null && inspector==null)loader.CancelInspect(inspection.Advance());
             quickSource=null;quickDecodeSide=0;Get<Image>("QuickDetailImage").Source=null;
+            ClearQuickVideo();
+        }
+
+        void ClearQuickVideo() {
+            if(quickPlayer==null)return;
+            quickPlayer.Dispose();
+            quickPlayer=null;quickVideoRow=null;
+            var host=Get<ContentControl>("QuickVideoHost");
+            host.Content=null;host.Visibility=Visibility.Collapsed;
+        }
+
+        static bool CanPlayQuickVideo(MediaRow row) {
+            return row!=null && Formats.IsVideo(row.Extension) && row.Status!="EVIDENCE" && !row.SourceIsHistorical &&
+                !String.IsNullOrEmpty(row.RootPath) && !String.IsNullOrEmpty(row.RelativePath) && !Archives.IsPath(row.RelativePath);
+        }
+
+        static bool SamePreviewSource(MediaRow first,MediaRow second) {
+            return first!=null && first.GroupId==second.GroupId && first.ContentId==second.ContentId &&
+                first.RootId==second.RootId && first.RootPath==second.RootPath && first.RelativePath==second.RelativePath &&
+                first.FileIdentity==second.FileIdentity && first.Size==second.Size && first.ModifiedTicks==second.ModifiedTicks;
+        }
+
+        void UpdateQuickVideo(CardItem card) {
+            var row=card==null ? null : card.Record;
+            if(!Ready || display!=ReviewView.Quick || inspector!=null || !CanPlayQuickVideo(row)) {
+                ClearQuickVideo();
+                return;
+            }
+            if(SamePreviewSource(quickVideoRow,row))return;
+            ResetQuickPreview();
+            quickPlayer=CreateVideoPlayer(Get<Grid>("QuickVideoSurface"),row);
+            quickVideoRow=row;
+            var host=Get<ContentControl>("QuickVideoHost");
+            host.Content=quickPlayer;host.Visibility=Visibility.Visible;
         }
         void LoadQuickPreview() {
             if(display!=ReviewView.Quick || inspector!=null)return;
             var card=QuickCard();var row=card==null ? null : card.Record;
             if(row==null || row.Status=="EVIDENCE" || row.SourceIsHistorical || String.IsNullOrEmpty(row.RootPath) || String.IsNullOrEmpty(row.RelativePath)){ResetQuickPreview();return;}
+            if(CanPlayQuickVideo(row))return;
             var host=Get<FrameworkElement>("QuickImageHost");
             int desired=Math.Min(InspectionPlan.MaxSide,Math.Max(256,(int)Math.Ceiling(Math.Max(host.ActualWidth,host.ActualHeight))));
-            bool same=quickSource!=null && quickSource.GroupId==row.GroupId && quickSource.ContentId==row.ContentId && quickSource.RootPath==row.RootPath && quickSource.RelativePath==row.RelativePath && quickSource.FileIdentity==row.FileIdentity && quickSource.ModifiedTicks==row.ModifiedTicks;
+            bool same=SamePreviewSource(quickSource,row);
             if(same && desired<=quickDecodeSide+32)return;
             if(!same)ResetQuickPreview();
             quickSource=row;quickDecodeSide=desired;
@@ -235,13 +272,18 @@ namespace MediaReviewer {
             bool showPreviewTab=display!=ReviewView.Quick;
             ShowPreviewPane(!workspace.PreviewCollapsed && showPreviewTab);
             Button("PreviewPaneButton").Visibility=showPreviewTab ? Visibility.Visible : Visibility.Collapsed;
+            Get<FrameworkElement>("PreviewEdge").Visibility=showPreviewTab ? Visibility.Visible : Visibility.Collapsed;
             SetPaneTab("PreviewPaneButton",workspace.PreviewCollapsed ? "Left" : "Right",workspace.PreviewCollapsed ? "Expand right preview" : "Collapse right preview");
             Button("PaneDetailsButton").IsEnabled=Button("PaneInspectButton").IsEnabled=Ready && focus!=null;
+            bool video=focus!=null && Formats.IsVideo(focus.Record.Extension);
+            Button("PaneInspectButton").Content=Button("QuickInspectButton").Content=video ? "Inspect / video" : "Inspect";
+            Button("PaneInspectButton").ToolTip=Button("QuickInspectButton").ToolTip=video ? "Open video inspection with playback, seek and volume controls" : "Open full image inspection";
             Button("PaneOpenButton").IsEnabled=Ready && focus!=null && focus.Record.Status!="EVIDENCE" && focus.Record.LocationCount>0;
             Button("PaneCaseButton").Visibility=focus!=null && focus.Record.Status=="NON_COMPLIANT" ? Visibility.Visible : Visibility.Collapsed;
             Button("PaneCaseButton").IsEnabled=Ready;
             var quick=Get<FrameworkElement>("QuickPane");quick.DataContext=display==ReviewView.Quick ? focus : null;
             quick.Visibility=display==ReviewView.Quick ? Visibility.Visible : Visibility.Collapsed;
+            UpdateQuickVideo(focus);
             Button("QuickNonCompliantButton").IsEnabled=Button("QuickCompliantButton").IsEnabled=Ready && focus!=null && focus.CanSelect;
             Button("QuickInspectButton").IsEnabled=Ready && focus!=null;
             Button("QuickPreviousButton").IsEnabled=CanMoveQuick(-1);

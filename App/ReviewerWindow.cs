@@ -57,7 +57,7 @@ namespace MediaReviewer {
             timer=new DispatcherTimer(DispatcherPriority.Background,window.Dispatcher){Interval=TimeSpan.FromMilliseconds(100)};
             timer.Tick+=(s,e)=>Tick();timer.Start();
             window.Closing+=Closing;
-            Click("CreateButton",()=>ChooseDatabase(true));Click("OpenButton",()=>ChooseDatabase(false));
+            Click("CatalogButton",ChooseDatabase);
             Click("BrowseButton",()=>{string selected=ChooseFolder("Choose a media source",Box("SourceBox").Text);if(selected!=null)Box("SourceBox").Text=selected;});
             Click("StartButton",StartScan);Click("ResumeButton",()=>engine.ResumeScan(status.ResumeId,Number("WorkerBox")));
             Click("CancelButton",()=>engine.CancelScan());
@@ -89,13 +89,29 @@ namespace MediaReviewer {
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
-            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and catalog tools. Use the arrows at the panel edges to collapse or reopen them. Drag the preview divider above or below its arrow to resize it.\n\nDouble-click an item or choose Quick Review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
+            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and catalog tools. Use the arrows at the panel edges to collapse or reopen them. Drag the thin preview divider immediately to the left of its arrow to resize it.\n\nDouble-click an item to open Inspect without changing the view. Choose Quick Review in the sidebar for directional review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
             Click("AboutButton",About);
             SetUpWorkspace(persistWorkspace);
+            SetUpCommandSections();
             UpdateControls();
         }
 
         void Click(string name,Action action){Button(name).Click+=(s,e)=>Guard(action);}
+        void SetUpCommandSections() {
+            Action summarize=()=>{
+                Get<Expander>("ScanSettingsExpander").Header="Scan settings · "+((ComboBoxItem)Combo("ModeBox").SelectedItem).Content+" · "+Number("WorkerBox")+" workers"+(Box("AgeBox").Text.Trim()=="0" ? "" : " · age limit");
+                var type=Combo("TypeBox").SelectedItem as ComboBoxItem;
+                var sort=Combo("SortBox").SelectedItem as ComboBoxItem;
+                Get<Expander>("FiltersExpander").Header="Filters and display · "+(type==null ? "All types" : type.Content)+" · "+(sort==null ? "First found" : sort.Content)+(String.IsNullOrWhiteSpace(Box("FolderBox").Text) ? "" : " · folder filter");
+                Get<Expander>("ReviewNotesExpander").Header="Reviewer and notes · "+(String.IsNullOrWhiteSpace(Box("ReviewerBox").Text) ? "No reviewer label" : Box("ReviewerBox").Text)+(String.IsNullOrWhiteSpace(Box("NotesBox").Text) ? "" : " · notes entered");
+            };
+            foreach(string name in new[]{"ModeBox","WorkerBox","TypeBox","SortBox"})Combo(name).SelectionChanged+=(s,e)=>summarize();
+            foreach(string name in new[]{"AgeBox","FolderBox","ReviewerBox","NotesBox"})Box(name).TextChanged+=(s,e)=>summarize();
+            Box("FolderBox").KeyDown+=(s,e)=>{if(e.Key==Key.Enter){e.Handled=true;NewPage(1);}};
+            // Keep a useful gallery area even with several sections open on a short screen.
+            Window.SizeChanged+=(s,e)=>Get<FrameworkElement>("TopControls").MaxHeight=Math.Max(220,Math.Min(400,Window.ActualHeight*0.44));
+            summarize();
+        }
         void Guard(Action action){try{action();}catch(Exception e){Message(e.GetBaseException().Message);}}
         void Queue(string id,Action<UiResult> action){pending.Add(id,action);}
         void Work(string id,string label,Action<UiResult> complete=null,bool notifyOnFailure=false) {
@@ -103,12 +119,24 @@ namespace MediaReviewer {
             Queue(id,r=>{if(task==id)task=null;Message(r.Success ? (r.Value??(r.Reconnection==null ? label+" complete." : r.Reconnection.Summary)) : label+" failed: "+r.Error);if(complete!=null && (r.Success || notifyOnFailure))complete(r);});
         }
 
-        void ChooseDatabase(bool create,bool allowPackages=true) {
-            string filter=allowPackages ? "Media Reviewer files (*.sqlite;*.db;*.mcrevidence)|*.sqlite;*.db;*.mcrevidence" : "SQLite catalogs (*.sqlite;*.db)|*.sqlite;*.db";
-            string path=create ? SaveFile("SQLite database (*.sqlite)|*.sqlite","Media Review.sqlite") : OpenFile(filter+"|All files (*.*)|*.*");
-            if(path==null)return;
-            if(!create && allowPackages && String.Equals(Path.GetExtension(path),".mcrevidence",StringComparison.OrdinalIgnoreCase))OpenPackage(path);
-            else Open(path,create);
+        void ChooseDatabase() {
+            var picker=new OpenFileDialog {
+                Title="Select an existing catalog or enter a new filename",
+                Filter="Catalogs and Evidence packages (*.sqlite;*.db;*.mcrevidence)|*.sqlite;*.db;*.mcrevidence|All files (*.*)|*.*",
+                CheckFileExists=false, CheckPathExists=true, DefaultExt=".sqlite"
+            };
+            if(picker.ShowDialog(Window)!=true)return;
+            string path=picker.FileName;
+            if(String.Equals(Path.GetExtension(path),".mcrevidence",StringComparison.OrdinalIgnoreCase))OpenPackage(path);
+            else Open(path,IsNewCatalogPath(path));
+        }
+
+        internal static bool IsNewCatalogPath(string path) {
+            try {
+                if((File.GetAttributes(Paths.Io(path)) & FileAttributes.Directory)!=0)
+                    throw new ArgumentException("Select a catalog file or enter a new filename.");
+                return false;
+            } catch(FileNotFoundException) { return true; }
         }
 
         internal void Open(string path,bool create) {
@@ -324,7 +352,7 @@ namespace MediaReviewer {
             bool ready=Ready,scanning=status!=null && status.RunningScan;
             int count=Selected().Length;
             Text("SelectionLabel",count+" selected");
-            Button("CreateButton").IsEnabled=Button("OpenButton").IsEnabled=!closing && !switchingCatalog && closingDatabase==null && !scanning && task==null && pending.Count==0 && (engine==null || engine.Ready || engine.Faulted);
+            Button("CatalogButton").IsEnabled=!closing && !switchingCatalog && closingDatabase==null && !scanning && task==null && pending.Count==0 && (engine==null || engine.Ready || engine.Faulted);
             Button("StartButton").IsEnabled=ready && !scanning;
             Button("ResumeButton").IsEnabled=ready && !scanning && status!=null && !String.IsNullOrEmpty(status.ResumeId);
             Button("CancelButton").IsEnabled=ready && scanning;

@@ -48,16 +48,13 @@ namespace MediaReviewer {
             var dialog=Dialog("Open or create a catalog",panel,510,240);
             dialog.Icon=Window.Icon;dialog.ShowInTaskbar=false;dialog.ResizeMode=ResizeMode.NoResize;
             panel.Children.Add(new TextBlock {Text="Media Compliance Reviewer",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,8)});
-            panel.Children.Add(Label("Create a new catalog to start reviewing, or open an existing database to continue."));
+            panel.Children.Add(Label("Select an existing catalog to continue, or enter a new filename to create one."));
             var actions=Bar();panel.Children.Add(actions);
-            bool? create=null;
-            var add=ActionButton("Create catalog…",()=>{create=true;dialog.DialogResult=true;});
-            add.Name="StartupCreateButton";actions.Children.Add(add);
-            var open=ActionButton("Open catalog…",()=>{create=false;dialog.DialogResult=true;});
-            open.Name="StartupOpenButton";open.IsDefault=true;actions.Children.Add(open);
+            var open=ActionButton("Open or create catalog…",()=>dialog.DialogResult=true);
+            open.Name="StartupCatalogButton";open.IsDefault=true;actions.Children.Add(open);
             var later=ActionButton("Later",dialog.Close);later.Name="StartupLaterButton";later.IsCancel=true;actions.Children.Add(later);
             if(beforeShow!=null)beforeShow(dialog);
-            if(dialog.ShowDialog()==true && create.HasValue)Guard(()=>ChooseDatabase(create.Value,false));
+            if(dialog.ShowDialog()==true)Guard(ChooseDatabase);
         }
 
         void About() {

@@ -96,23 +96,42 @@ namespace MediaReviewer {
             var preview=new ScrollViewer {Content=image,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled};
             preview.SetResourceReference(Control.BackgroundProperty,"InsetBrush");
             var footer=Bar();Dock(panel,footer,System.Windows.Controls.Dock.Bottom);footer.Children.Add(ActionButton("Close",window.Close));
-            var viewport=new Grid();viewport.Children.Add(preview);panel.Children.Add(viewport);
-            bool live=true,reviewPending=false;int side=0,sourceWidth=0,sourceHeight=0;
+            var viewport=new Grid {Focusable=true};viewport.Children.Add(preview);panel.Children.Add(viewport);
+            System.Windows.Automation.AutomationProperties.SetName(viewport,"Media preview. Left and Right browse. Up marks Compliant. Down marks Non-compliant.");
+            viewport.PreviewMouseLeftButtonDown+=(s,e)=>viewport.Focus();
+            bool live=true;int side=0,sourceWidth=0,sourceHeight=0;
             string layout="Fit";double zoom=1;
-            var reviewCard=new CardItem(row);CardItem current=reviewCard;
-            var available=BucketKeys.Select((key,index)=>ActionButton(BucketNames[index],()=>Guard(()=>{
-                if(!live || reviewPending)return;
-                Review(key,new[]{current},r=>{
-                    if(!live)return;reviewPending=false;
-                    feedback.Text=r.Success ? "Review saved · "+BucketNames[index] : r.Error;
-                    if(r.Success)window.Close();
-                },reviewer.Text,notes.Text);
-                reviewPending=current.IsPending;
-            }))).ToArray();
-            foreach(Button button in available)reviewActions.Children.Add(button);
-
             int position=positionOf(row);
+            CardItem current=position>=0 ? cards[position] : new CardItem(row);
+            Action<int> navigate=direction=>{
+                if(!Ready || current.IsPending)return;
+                int index=positionOf(row),next=index+direction;
+                if(index>=0 && next>=0 && next<cards.Count)Inspect(cards[next].Record);
+            };
+            Action<string> classify=key=>{
+                if(!Ready || current.IsPending)return;
+                if(current.Record.ContentId!=row.ContentId || current.Record.ReviewRevision!=row.ReviewRevision){
+                    feedback.Text="This item changed. Reopen it to review the latest version.";
+                    return;
+                }
+                long generation=view.Current;
+                int index=positionOf(row);
+                CardItem next=(key=="COMPLIANT" || key=="NON_COMPLIANT") && index>=0 && index+1<cards.Count ? cards[index+1] : null;
+                Review(key,new[]{current},r=>{
+                    if(!live)return;
+                    if(!r.Success){feedback.Text=r.Error;return;}
+                    if(Ready && view.Accept(generation) && next!=null && cards.Contains(next))Inspect(next.Record);
+                    else window.Close();
+                },reviewer.Text,notes.Text,()=>live && Ready && view.Accept(generation));
+            };
+            for(int i=0;i<BucketKeys.Length;i++){
+                string key=BucketKeys[i];
+                reviewActions.Children.Add(ActionButton(BucketNames[i],()=>Guard(()=>classify(key))));
+            }
+
             if(position>=0)image.Source=cards[position].Image;
+            bool video=Formats.IsVideo(row.Extension);
+            if(video)feedback.Text="Video inspection · preparing playback. Retry loads a fresh source poster.";
             Action<int> request=desired=>{
                 long generation=inspection.Advance();side=desired;feedback.Text=image.Source==null ? "Loading source preview…" : "Showing cached preview while loading source detail…";
                 if(!loader.QueueInspect(row,generation,desired))feedback.Text="Source preview is unavailable during shutdown.";
@@ -126,7 +145,7 @@ namespace MediaReviewer {
             };
             var refine=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(180)};
             refine.Tick+=(s,e)=>{refine.Stop();Guard(()=>{
-                if(live && sourceWidth>0){var plan=InspectionPlan.Create(sourceWidth,sourceHeight,Math.Max(1,preview.ViewportWidth),Math.Max(1,preview.ViewportHeight),layout,zoom);if(plan.DecodeSide>side)request(plan.DecodeSide);}
+                if(live && !video && sourceWidth>0){var plan=InspectionPlan.Create(sourceWidth,sourceHeight,Math.Max(1,preview.ViewportWidth),Math.Max(1,preview.ViewportHeight),layout,zoom);if(plan.DecodeSide>side)request(plan.DecodeSide);}
             });};
             Action schedule=()=>{refine.Stop();refine.Start();};
             Action<string,double> choose=(mode,scale)=>{
@@ -154,39 +173,47 @@ namespace MediaReviewer {
             actions.Children.Add(ActionButton("100%",()=>Guard(()=>choose("Zoom",1))));
             actions.Children.Add(ActionButton("Retry",()=>Guard(()=>request(Math.Max(256,side)))));
             actions.Children.Add(ActionButton("Details / notes",()=>Guard(()=>Details(row))));
-            if(Formats.IsVideo(row.Extension))AttachVideoControls(actions,viewport,window,row,feedback);
-            if(position>=0){current=cards[position];if(position>0)actions.Children.Add(ActionButton("Previous item",()=>Guard(()=>Inspect(cards[position-1].Record))));
-                if(position+1<cards.Count)actions.Children.Add(ActionButton("Next item",()=>Guard(()=>Inspect(cards[position+1].Record))));}
+            VideoPlaybackControls player=null;
+            if(video) {
+                player=CreateVideoPlayer(viewport,row);
+                DockPanel.SetDock(player,System.Windows.Controls.Dock.Bottom);panel.Children.Insert(panel.Children.IndexOf(viewport),player);
+                window.Closed+=(s,e)=>player.Dispose();
+                window.Loaded+=(s,e)=>player.Prepare();
+            }
+            if(position>0)actions.Children.Add(ActionButton("← Previous item",()=>Guard(()=>navigate(-1))));
+            if(position>=0 && position+1<cards.Count)actions.Children.Add(ActionButton("Next item →",()=>Guard(()=>navigate(1))));
+            top.Children.Insert(2,Label("Arrow keys: ← Previous · → Next · ↑ Compliant · ↓ Non-compliant"));
+            window.PreviewKeyDown+=(s,e)=>{
+                if(!Ready || Keyboard.Modifiers!=ModifierKeys.None || reviewer.IsKeyboardFocusWithin ||
+                    notes.IsKeyboardFocusWithin || player!=null && player.IsKeyboardFocusWithin)return;
+                Key key=e.Key;
+                string destination=QuickReviewKey(key);
+                if(key!=Key.Left && key!=Key.Right && destination==null)return;
+                e.Handled=true;
+                if(e.IsRepeat)return;
+                if(destination!=null)Guard(()=>classify(destination));
+                else Guard(()=>navigate(key==Key.Left ? -1 : 1));
+            };
             showInspection=result=>{
                 if(result.Image!=null){image.Source=result.Image;sourceWidth=result.SourceWidth;sourceHeight=result.SourceHeight;apply();feedback.Text=sourceWidth+" × "+sourceHeight+" · "+row.RelativePath;}
                 else feedback.Text=result.Error??"Preview unavailable.";
             };
             window.Closed+=(s,e)=>{live=false;refine.Stop();loader.CancelInspect(inspection.Advance());showInspection=null;inspector=null;image.Source=null;};
-            window.Loaded+=(s,e)=>Guard(()=>request(Math.Min(InspectionPlan.MaxSide,Math.Max(256,(int)Math.Ceiling(Math.Max(preview.ActualWidth,preview.ActualHeight))))));
+            if(!video)window.Loaded+=(s,e)=>Guard(()=>request(Math.Min(InspectionPlan.MaxSide,Math.Max(256,(int)Math.Ceiling(Math.Max(preview.ActualWidth,preview.ActualHeight))))));
+            window.Loaded+=(s,e)=>viewport.Focus();
             window.Show();
+        }
+
+        VideoPlaybackControls CreateVideoPlayer(Grid viewport,MediaRow row) {
+            return new VideoPlaybackControls(viewport,complete=>{
+                var sourceEngine=engine;
+                if(!Ready)throw new InvalidOperationException("The catalog is unavailable.");
+                string request=sourceEngine.RequestVideoPlayback(row);
+                Queue(request,result=>complete(result.Value,result.Success ? null : result.Error));
+                return ()=>sourceEngine.CancelOperation(request);
+            });
         }
         int positionOf(MediaRow row){return cards.ToList().FindIndex(c=>c.Record.GroupId==row.GroupId && c.Record.ContentId==row.ContentId);}
 
-        void AttachVideoControls(WrapPanel actions,Grid viewport,Window window,MediaRow row,TextBlock feedback) {
-            var media=new MediaElement {LoadedBehavior=MediaState.Manual,UnloadedBehavior=MediaState.Close,Stretch=Stretch.Uniform,Visibility=Visibility.Collapsed};
-            viewport.Children.Add(media);
-            bool live=true,paused=false;var generation=new ViewGeneration();Button play=null,stop=null;
-            Action close=()=>{generation.Advance();media.Close();media.Source=null;media.Visibility=Visibility.Collapsed;paused=false;play.Content="Play video";play.IsEnabled=live;stop.IsEnabled=false;};
-            play=ActionButton("Play video",()=>Guard(()=>{
-                if(media.Source!=null){if(paused){media.Play();play.Content="Pause";}else{media.Pause();play.Content="Resume video";}paused=!paused;return;}
-                long version=generation.Advance();
-                Work(engine.RequestVideoPlayback(row),"Check video source",r=>{
-                    if(!live || !generation.Accept(version))return;
-                    if(!r.Success){close();feedback.Text=r.Error;return;}
-                    media.Source=new Uri(r.Value,UriKind.Absolute);media.Visibility=Visibility.Visible;media.Play();play.Content="Pause";play.IsEnabled=true;
-                },true);
-                play.IsEnabled=false;stop.IsEnabled=true;feedback.Text="Checking the selected video source…";
-            }));
-            stop=ActionButton("Stop video",()=>{close();feedback.Text="Showing saved poster.";});stop.IsEnabled=false;
-            media.MediaFailed+=(s,e)=>{if(media.Source!=null){close();feedback.Text="Windows could not play this encoding. The preview remains available.";}};
-            media.MediaEnded+=(s,e)=>{if(media.Source!=null){close();feedback.Text="Playback ended. Showing preview.";}};
-            window.Closed+=(s,e)=>{live=false;close();};
-            actions.Children.Add(play);actions.Children.Add(stop);
-        }
     }
 }

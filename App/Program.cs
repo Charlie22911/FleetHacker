@@ -70,7 +70,7 @@ namespace MediaReviewer {
                         if(args.Length!=2)throw new ArgumentException("Window smoke test needs a fixture database.");
                         controller.Window.Width=1024;controller.Window.Height=768;
                         controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>{
-                            try{controller.ShowStartupCatalog(Smoke.CheckStartupPrompt);controller.Open(args[1],false);}
+                            try{controller.ShowStartupCatalog(Smoke.CheckStartupPrompt);Smoke.CheckCatalogPath(args[1]);controller.Open(args[1],false);}
                             catch(Exception error){Console.Error.WriteLine(error);controller.Window.Close();}
                         }));
                         var timer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
