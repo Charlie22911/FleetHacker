@@ -105,9 +105,10 @@ namespace MediaReviewer {
             Click("PaneInspectButton",()=>{var card=FocusedCard();if(card!=null)Inspect(card.Record);});
             Click("PaneOpenButton",()=>{var card=FocusedCard();if(card!=null)Work(engine.RequestOpenOriginal(card.Record),"Open original");});
             Click("PaneCaseButton",()=>{var card=FocusedCard();if(card!=null)Work(engine.RequestCaseSheet(card.Record),"Case sheet",r=>ShowText("Non-compliant case sheet",r.Value));});
-            Click("QuickPreviousButton",()=>{MoveQuick(-1);FocusQuick();});Click("QuickNextButton",()=>{MoveQuick(1);FocusQuick();});
-            Click("QuickNonCompliantButton",()=>{FocusQuick();ReviewWorkspaceItems("NON_COMPLIANT");});
-            Click("QuickCompliantButton",()=>{FocusQuick();ReviewWorkspaceItems("COMPLIANT");});
+            Click("QuickPreviousButton",()=>{FocusQuick();RunQuickAction(Key.Left);});
+            Click("QuickNextButton",()=>{FocusQuick();RunQuickAction(Key.Right);});
+            Click("QuickNonCompliantButton",()=>{FocusQuick();RunQuickAction(Key.Down);});
+            Click("QuickCompliantButton",()=>{FocusQuick();RunQuickAction(Key.Up);});
             Click("QuickInspectButton",()=>{var card=QuickCard();if(card!=null)Inspect(card.Record);});
             SetUpQuickGestures();
             Window.PreviewKeyDown+=ReviewKey;
@@ -145,7 +146,8 @@ namespace MediaReviewer {
         }
         void FocusQuick(){if(display==ReviewView.Quick)Get<FrameworkElement>("QuickImageHost").Focus();}
 
-        CardItem QuickCard(){return cards.Count==0 ? null : cards[Math.Min(Math.Max(0,quickIndex),cards.Count-1)];}
+        int QuickPosition {get{return Math.Min(Math.Max(0,quickIndex),cards.Count-1);}}
+        CardItem QuickCard(){return QuickPosition<0 ? null : cards[QuickPosition];}
         CardItem FocusedCard(){return display==ReviewView.Quick ? QuickCard() : cards.FirstOrDefault(c=>c.IsSelected)??cards.FirstOrDefault();}
         void ResetQuickPreview(){
             if(quickSource!=null && inspector==null)loader.CancelInspect(inspection.Advance());
@@ -169,9 +171,13 @@ namespace MediaReviewer {
             if(result.Image!=null)Get<Image>("QuickDetailImage").Source=result.Image;
             else if(!String.IsNullOrEmpty(result.Error))Message(result.Error);
         }
+        bool CanMoveQuick(int direction) {
+            return Ready && cards.Count!=0 && (direction<0 ? QuickPosition>0 || page>1 : QuickPosition+1<cards.Count || page<pageCount);
+        }
         void MoveQuick(int direction){
+            if(!CanMoveQuick(direction))return;
             CancelQuickGesture();
-            int next=quickIndex+direction;
+            int next=QuickPosition+direction;
             if(next>=0 && next<cards.Count){ResetQuickPreview();quickIndex=next;UpdateControls();return;}
             int target=page+direction;
             if(target<1 || target>pageCount)return;
@@ -191,9 +197,10 @@ namespace MediaReviewer {
 
         void ReviewKey(object sender,KeyEventArgs e) {
             if(!Ready || e.Handled || Keyboard.Modifiers!=ModifierKeys.None)return;
-            string direction=QuickReviewKey(e.Key);
-            if(direction!=null && display==ReviewView.Quick && Get<FrameworkElement>("QuickImageHost").IsKeyboardFocusWithin){
-                e.Handled=true;if(!e.IsRepeat){CancelQuickGesture();Guard(()=>ReviewWorkspaceItems(direction));}return;
+            Key direction=e.Key;
+            if((direction==Key.Left || direction==Key.Right || direction==Key.Up || direction==Key.Down) &&
+                display==ReviewView.Quick && Get<FrameworkElement>("QuickImageHost").IsKeyboardFocusWithin){
+                e.Handled=true;if(!e.IsRepeat)Guard(()=>RunQuickAction(direction));return;
             }
             if(e.IsRepeat || (e.Key!=Key.C && e.Key!=Key.N))return;
             for(var node=Keyboard.FocusedElement as DependencyObject;node!=null;node=node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
@@ -237,8 +244,8 @@ namespace MediaReviewer {
             quick.Visibility=display==ReviewView.Quick ? Visibility.Visible : Visibility.Collapsed;
             Button("QuickNonCompliantButton").IsEnabled=Button("QuickCompliantButton").IsEnabled=Ready && focus!=null && focus.CanSelect;
             Button("QuickInspectButton").IsEnabled=Ready && focus!=null;
-            Button("QuickPreviousButton").IsEnabled=Ready && (quickIndex>0 || page>1);
-            Button("QuickNextButton").IsEnabled=Ready && (quickIndex+1<cards.Count || page<pageCount);
+            Button("QuickPreviousButton").IsEnabled=CanMoveQuick(-1);
+            Button("QuickNextButton").IsEnabled=CanMoveQuick(1);
             Button("ListModeButton").IsEnabled=display!=ReviewView.List;
             Button("ThumbnailsModeButton").IsEnabled=display!=ReviewView.Thumbnails;
             Button("QuickModeButton").IsEnabled=Ready && focus!=null && display!=ReviewView.Quick;

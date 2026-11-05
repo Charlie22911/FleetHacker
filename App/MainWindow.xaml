@@ -211,11 +211,26 @@
         </DockPanel>
       </Border>
       <Border x:Name="QuickPane" Grid.ColumnSpan="3" Style="{StaticResource SurfacePanel}" Padding="10" Visibility="Collapsed">
-        <DockPanel><WrapPanel DockPanel.Dock="Bottom"><Button x:Name="QuickNonCompliantButton" Content="← Non-compliant" Style="{StaticResource BadButton}"/><Button x:Name="QuickCompliantButton" Content="Compliant →" Style="{StaticResource GoodButton}"/><Button x:Name="QuickPreviousButton" Content="Previous item"/><Button x:Name="QuickNextButton" Content="Skip to next"/><Button x:Name="QuickInspectButton" Content="Inspect"/><TextBlock x:Name="QuickLabel" Text="Swipe, drag, or use the arrow keys." VerticalAlignment="Center" Margin="8,0"/></WrapPanel>
+        <DockPanel>
+          <WrapPanel DockPanel.Dock="Bottom" Margin="0,3,0,0">
+            <Button x:Name="QuickPreviousButton" Content="← Previous" ToolTip="Go to the previous image without changing its review. Swipe, drag, or press Left." ToolTipService.ShowOnDisabled="True"/>
+            <Button x:Name="QuickNextButton" Content="Next →" ToolTip="Go to the next image without changing its review. Swipe, drag, or press Right." ToolTipService.ShowOnDisabled="True"/>
+            <Button x:Name="QuickCompliantButton" Content="↑ Compliant" Style="{StaticResource GoodButton}" ToolTip="Mark this image Compliant. Swipe, drag, or press Up."/>
+            <Button x:Name="QuickNonCompliantButton" Content="↓ Non-compliant" Style="{StaticResource BadButton}" ToolTip="Mark this image Non-compliant. Swipe, drag, or press Down."/>
+            <Button x:Name="QuickInspectButton" Content="Inspect" ToolTip="Open this image in the full inspection view."/>
+            <TextBlock Text="Swipe, drag, or use arrow keys" FontSize="11" Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" Margin="7,0"/>
+          </WrapPanel>
           <StackPanel DockPanel.Dock="Top"><TextBlock Text="{Binding Name}" FontSize="20" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding PathLabel}" TextTrimming="CharacterEllipsis"/></StackPanel>
-          <Grid x:Name="QuickImageHost" Background="{DynamicResource InsetBrush}" ClipToBounds="True" Focusable="True" AutomationProperties.Name="Quick Review image. Left marks non-compliant. Right marks compliant.">
+          <Grid x:Name="QuickImageHost" Background="{DynamicResource InsetBrush}" ClipToBounds="True" Focusable="True"
+                AutomationProperties.Name="Quick Review image. Left for previous, Right for next, Up for Compliant, Down for Non-compliant."
+                ToolTip="Left: previous. Right: next. Up: Compliant. Down: Non-compliant. Click the image to focus it for arrow keys."
+                ToolTipService.InitialShowDelay="950" ToolTipService.ShowDuration="4500">
             <Grid x:Name="QuickSlide" IsHitTestVisible="False"><Image Source="{Binding Image}" Stretch="Uniform"/><TextBlock Text="{Binding Placeholder}" Visibility="{Binding PlaceholderVisibility}" HorizontalAlignment="Center" VerticalAlignment="Center" TextWrapping="Wrap" Margin="10"/><Image x:Name="QuickDetailImage" Stretch="Uniform"/></Grid>
             <Border BorderBrush="{DynamicResource FocusBrush}" BorderThickness="1" IsHitTestVisible="False"><Border.Style><Style TargetType="Border"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding IsKeyboardFocused,ElementName=QuickImageHost}" Value="True"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></Border.Style></Border>
+            <Border x:Name="QuickGestureBadge" Style="{StaticResource SurfacePanel}" Visibility="Collapsed" IsHitTestVisible="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8,0,0" Padding="10,4">
+              <TextBlock x:Name="QuickGestureLabel" FontSize="12" FontWeight="SemiBold"/>
+            </Border>
           </Grid>
         </DockPanel>
       </Border>

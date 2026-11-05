@@ -14,6 +14,7 @@ using System.Windows.Media.Imaging;
 
 namespace MediaReviewer {
     static class Smoke {
+        const string FixturePassword="generated test password";
         internal static void CheckStartupPrompt(Window dialog) {
             var buttons=((WrapPanel)((StackPanel)dialog.Content).Children[2]).Children.OfType<Button>().ToArray();
             Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCreateButton","StartupOpenButton","StartupLaterButton"}),
@@ -26,6 +27,12 @@ namespace MediaReviewer {
             foreach(string name in new[]{"CreateButton","OpenButton","MaintenanceButton","PreviewTasksButton","LogButton","HelpButton","AboutButton","ThemeButton",
                 "ListModeButton","ThumbnailsModeButton","QuickModeButton","RefreshViewButton"})
                 Check(sidebar.IsAncestorOf((Button)window.FindName(name)),"Expected sidebar command: "+name);
+        }
+
+        internal static void CheckQuickKeyMapping() {
+            Check(ReviewerWindow.QuickReviewKey(Key.Up)=="COMPLIANT" && ReviewerWindow.QuickReviewKey(Key.Down)=="NON_COMPLIANT" &&
+                ReviewerWindow.QuickReviewKey(Key.Left)==null && ReviewerWindow.QuickReviewKey(Key.Right)==null,
+                "Only the vertical arrows should classify in Quick Review.");
         }
 
         internal static void CheckShell(Window window,string snapshot) {
@@ -90,10 +97,11 @@ namespace MediaReviewer {
             if(!SystemParameters.HighContrast)Check(!Object.Equals(before,window.FindResource("PageBrush")),"Theme switch did not change the page brush.");
             var quick=(Button)window.FindName("QuickModeButton");quick.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(((FrameworkElement)window.FindName("QuickPane")).IsVisible && list.Items.Count>0,"Quick Review must show the already-loaded page.");
-            Check(ReviewerWindow.QuickReviewKey(Key.Left)=="NON_COMPLIANT" && ReviewerWindow.QuickReviewKey(Key.Right)=="COMPLIANT" &&
-                ReviewerWindow.QuickReviewKey(Key.Up)==null && ReviewerWindow.QuickReviewDrag(-150,30,500)=="NON_COMPLIANT" &&
-                ReviewerWindow.QuickReviewDrag(150,30,500)=="COMPLIANT" && ReviewerWindow.QuickReviewDrag(150,140,500)==null &&
-                ReviewerWindow.QuickReviewDrag(10,0,500)==null,"Quick Review gestures must distinguish direction from small or vertical movement.");
+            CheckQuickKeyMapping();
+            Check(ReviewerWindow.QuickReviewDrag(-150,30,500,250)==Key.Left && ReviewerWindow.QuickReviewDrag(150,30,500,250)==Key.Right &&
+                ReviewerWindow.QuickReviewDrag(15,-85,500,250)==Key.Up && ReviewerWindow.QuickReviewDrag(15,85,500,250)==Key.Down &&
+                ReviewerWindow.QuickReviewDrag(150,140,500,250)==Key.None && ReviewerWindow.QuickReviewDrag(0,10,500,250)==Key.None,
+                "Quick Review drags must recognize each direction and ignore short or diagonal movement.");
         }
         internal static void CheckWideShell(Window window) {
             var sidebar=(FrameworkElement)window.FindName("QueueSidebar");var compact=(FrameworkElement)window.FindName("CompactQueues");
@@ -104,15 +112,50 @@ namespace MediaReviewer {
             button.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(sidebar.IsVisible && !compact.IsVisible,"The left sidebar must expand again.");
         }
-        internal static void SaveQuickReviewWithArrow(Window window) {
+        static void QuickArrow(Window window,Key key) {
             var host=(FrameworkElement)window.FindName("QuickImageHost");
             window.Activate();host.Focus();
             Check(host.IsKeyboardFocusWithin,"The Quick Review image must accept keyboard focus.");
-            var right=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(host),Environment.TickCount,Key.Right) {
+            var arrow=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(host),Environment.TickCount,key) {
                 RoutedEvent=Keyboard.PreviewKeyDownEvent
             };
-            host.RaiseEvent(right);
-            Check(right.Handled,"Quick Review did not handle the right arrow.");
+            host.RaiseEvent(arrow);
+            Check(arrow.Handled,"Quick Review did not handle "+key+".");
+        }
+        internal static void CheckQuickNavigationAndMarkCompliant(Window window) {
+            var pane=(FrameworkElement)window.FindName("QuickPane");
+            var first=(CardItem)pane.DataContext;
+            QuickArrow(window,Key.Left);
+            Check(ReferenceEquals(pane.DataContext,first),"Left at the first image must keep the current item.");
+            QuickArrow(window,Key.Right);
+            var next=pane.DataContext as CardItem;
+            Check(next!=null && !ReferenceEquals(first,next),"Right must display the next image.");
+            QuickArrow(window,Key.Left);
+            Check(ReferenceEquals(pane.DataContext,first) && first.CanSelect && next.CanSelect &&
+                first.Record.Status=="TO_REVIEW" && next.Record.Status=="TO_REVIEW","Horizontal browsing must preserve both review decisions.");
+            QuickArrow(window,Key.Up);
+        }
+        internal static void MarkQuickNonCompliant(Window window) {
+            bool unlocked=false;
+            var prompt=window.Dispatcher.BeginInvoke(new Action(()=>{
+                var dialog=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title=="Unlock stored originals" && w.IsVisible);
+                if(dialog==null)return;
+                var panel=(StackPanel)dialog.Content;
+                panel.Children.OfType<PasswordBox>().Single().Password=FixturePassword;
+                unlocked=true;
+                panel.Children.OfType<WrapPanel>().Single().Children.OfType<Button>().Single(b=>b.IsDefault)
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            }));
+            QuickArrow(window,Key.Down);
+            if(!unlocked)prompt.Abort();
+            Check(unlocked,"Down did not open the protected review prompt.");
+        }
+        internal static void CheckSavedQuickReviews(string path) {
+            using(var database=new SqliteConnection(path,false)){
+                foreach(string bucket in new[]{"COMPLIANT","NON_COMPLIANT"})
+                    Check(Convert.ToInt64(database.Scalar("SELECT COUNT(*) FROM review_groups WHERE retired=0 AND status=?",bucket))==1,
+                        "Quick Review did not save exactly one "+bucket+" decision.");
+            }
         }
         static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
         static void Wait(Func<bool> condition){var watch=Stopwatch.StartNew();while(!condition()){if(watch.Elapsed>TimeSpan.FromSeconds(40))throw new TimeoutException("Timed out waiting for the reviewer engine.");Thread.Sleep(25);}}
@@ -164,15 +207,14 @@ namespace MediaReviewer {
                 Check(check.Full==1 && check.Failed==0,"Per-root check did not verify the copied source.");
                 Result(engine,engine.RequestApplySourceConnection(connection,false));
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=2,Bucket="COMPLIANT"})).Page.Rows.Single().SourcePath==copied,"Applied source did not become the active occurrence path.");
-                const string password="generated test password";
-                Result(engine,engine.RequestVaultUnlock(Encoding.UTF8.GetBytes(password),true));
+                Result(engine,engine.RequestVaultUnlock(Encoding.UTF8.GetBytes(FixturePassword),true));
                 Result(engine,engine.RequestOriginalRetention(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="EVIDENCE",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
                 using(var original=Result(engine,engine.RequestEvidenceInspect(id)).Evidence)
                     Check(original.Verified && original.Size==new FileInfo(image).Length,"Encrypted original was not verified.");
                 string package=Path.Combine(directory,"fixture.mcrevidence");
                 Result(engine,engine.RequestEvidencePackageExport(new[]{id},package,Guid.NewGuid().ToString("N")));
                 using(var reader=EvidencePackageReader.Open(package,CancellationToken.None,null)) {
-                    reader.Unlock(Encoding.UTF8.GetBytes(password),CancellationToken.None,null);
+                    reader.Unlock(Encoding.UTF8.GetBytes(FixturePassword),CancellationToken.None,null);
                     using(var original=reader.Inspect(0,CancellationToken.None,null))Check(original.Verified,"Protected package original was not verified.");
                 }
                 string report=Path.Combine(directory,"report.csv");
@@ -183,6 +225,15 @@ namespace MediaReviewer {
                 var sheet=Result(engine,engine.RequestCaseSheet(flagged)).Value;
                 Check(sheet.Contains("Full SHA-256:") && sheet.Contains("Windows file owner:") && sheet.Contains("fixture"),"The case sheet did not include the recorded review and source metadata.");
                 Result(engine,engine.RequestReview(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="TO_REVIEW",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
+                string quickRoot=Directory.CreateDirectory(Path.Combine(directory,"quick-navigation")).FullName;
+                string quickFolder=Directory.CreateDirectory(Path.Combine(quickRoot,"example.user")).FullName;
+                var encoder=new PngBitmapEncoder();
+                var pixels=new byte[]{0,50,140,255,90,200,10,255};
+                encoder.Frames.Add(BitmapFrame.Create(BitmapSource.Create(2,1,96,96,PixelFormats.Bgra32,null,pixels,8)));
+                using(var output=File.Create(Path.Combine(quickFolder,"next.png")))encoder.Save(output);
+                string scan=engine.StartScan(new ScanOptions {RootPath=quickRoot,WorkerCount=1});
+                Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==1);
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4})).Page.Total==2,"The Quick Review navigation fixture is incomplete.");
             }
             CheckRenamed(directory,image);
             Console.WriteLine("Embedded SQLite, scan, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;

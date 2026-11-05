@@ -1,11 +1,11 @@
 using System;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 
 namespace MediaReviewer {
     sealed partial class ReviewerWindow {
-        const string QuickHint="Swipe, drag, or use the arrow keys.";
         FrameworkElement quickGestureHost;
         TranslateTransform quickOffset;
         TouchDevice quickTouch;
@@ -15,14 +15,31 @@ namespace MediaReviewer {
         long quickGestureGeneration;
 
         internal static string QuickReviewKey(Key key) {
-            if(key==Key.Left)return "NON_COMPLIANT";
-            return key==Key.Right ? "COMPLIANT" : null;
+            if(key==Key.Up)return "COMPLIANT";
+            return key==Key.Down ? "NON_COMPLIANT" : null;
         }
 
-        internal static string QuickReviewDrag(double x,double y,double width) {
-            double threshold=Math.Max(60,Math.Min(130,width*0.18));
-            if(Math.Abs(x)<threshold || Math.Abs(x)<1.5*Math.Abs(y))return null;
-            return QuickReviewKey(x<0 ? Key.Left : Key.Right);
+        internal static Key QuickReviewDrag(double x,double y,double width,double height) {
+            double horizontal=Math.Abs(x),vertical=Math.Abs(y);
+            if(horizontal>=Math.Max(45,Math.Min(120,width*0.16)) && horizontal>=1.5*vertical)
+                return x<0 ? Key.Left : Key.Right;
+            if(vertical>=Math.Max(32,Math.Min(95,height*0.18)) && vertical>=1.5*horizontal)
+                return y<0 ? Key.Up : Key.Down;
+            return Key.None;
+        }
+
+        bool CanQuickAction(Key direction) {
+            if(display!=ReviewView.Quick || !Ready)return false;
+            if(direction==Key.Left || direction==Key.Right)return CanMoveQuick(direction==Key.Left ? -1 : 1);
+            var card=QuickCard();
+            return QuickReviewKey(direction)!=null && card!=null && card.CanSelect;
+        }
+
+        void RunQuickAction(Key direction) {
+            if(!CanQuickAction(direction))return;
+            CancelQuickGesture();
+            if(direction==Key.Left || direction==Key.Right)MoveQuick(direction==Key.Left ? -1 : 1);
+            else ReviewWorkspaceItems(QuickReviewKey(direction));
         }
 
         void SetUpQuickGestures() {
@@ -64,27 +81,38 @@ namespace MediaReviewer {
             if(!Ready || display!=ReviewView.Quick || quickGestureCard!=null)return false;
             FocusQuick();
             var card=QuickCard();
-            if(card==null || !card.CanSelect)return false;
+            if(card==null)return false;
             quickGestureCard=card;quickGestureRow=card.Record;quickGestureStart=start;quickGestureGeneration=view.Current;
             return true;
         }
 
         void UpdateQuickGesture(Point current) {
             var delta=current-quickGestureStart;
-            quickOffset.X=Math.Max(-180,Math.Min(180,delta.X));
-            string destination=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth);
-            Text("QuickLabel",destination==null ? QuickHint : destination=="COMPLIANT" ? "Release for Compliant" : "Release for Non-compliant");
+            bool horizontal=Math.Abs(delta.X)>Math.Abs(delta.Y);
+            quickOffset.X=horizontal ? Math.Max(-110,Math.Min(110,delta.X)) : 0;
+            quickOffset.Y=horizontal ? 0 : Math.Max(-80,Math.Min(80,delta.Y));
+            Key direction=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth,quickGestureHost.ActualHeight);
+            var badge=Get<Border>("QuickGestureBadge");
+            badge.Visibility=CanQuickAction(direction) ? Visibility.Visible : Visibility.Collapsed;
+            if(badge.Visibility==Visibility.Visible) {
+                switch(direction) {
+                    case Key.Left: Text("QuickGestureLabel","← Release for previous");break;
+                    case Key.Right: Text("QuickGestureLabel","Release for next →");break;
+                    case Key.Up: Text("QuickGestureLabel","↑ Release to mark Compliant");break;
+                    case Key.Down: Text("QuickGestureLabel","↓ Release to mark Non-compliant");break;
+                }
+            }
         }
 
         void FinishQuickGesture(Point current) {
             var delta=current-quickGestureStart;
-            string destination=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth);
+            Key direction=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth,quickGestureHost.ActualHeight);
             var card=QuickCard();
             bool currentItem=Ready && display==ReviewView.Quick && view.Accept(quickGestureGeneration) &&
-                card!=null && ReferenceEquals(card,quickGestureCard) && card.CanSelect &&
+                card!=null && ReferenceEquals(card,quickGestureCard) &&
                 card.Record.ContentId==quickGestureRow.ContentId && card.Record.ReviewRevision==quickGestureRow.ReviewRevision;
             CancelQuickGesture();
-            if(currentItem && destination!=null)Guard(()=>ReviewWorkspaceItems(destination));
+            if(currentItem)Guard(()=>RunQuickAction(direction));
         }
 
         void CancelQuickGesture() {
@@ -93,8 +121,8 @@ namespace MediaReviewer {
             var touch=quickTouch;quickTouch=null;
             if(touch!=null)quickGestureHost.ReleaseTouchCapture(touch);
             if(quickGestureHost.IsMouseCaptured)quickGestureHost.ReleaseMouseCapture();
-            quickOffset.X=0;
-            Text("QuickLabel",QuickHint);
+            quickOffset.X=quickOffset.Y=0;
+            Get<Border>("QuickGestureBadge").Visibility=Visibility.Collapsed;
         }
     }
 }

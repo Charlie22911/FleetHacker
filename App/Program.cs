@@ -75,13 +75,20 @@ namespace MediaReviewer {
                         }));
                         var timer=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
                         var elapsed=System.Diagnostics.Stopwatch.StartNew();
-                        bool rendered=false,reviewStarted=false;
+                        bool rendered=false;
+                        int reviewsStarted=0;
                         timer.Tick+=(s,e)=>{
-                            if(reviewStarted) {
+                            if(reviewsStarted!=0) {
                                 var message=((System.Windows.Controls.TextBlock)controller.Window.FindName("MessageText")).Text;
                                 if(message!="Review saved." && elapsed.Elapsed<TimeSpan.FromSeconds(12))return;
                                 timer.Stop();rendered=message=="Review saved.";
                                 if(!rendered)Console.Error.WriteLine("Quick Review did not commit: "+message);
+                                if(rendered && reviewsStarted==1) {
+                                    try{
+                                        Smoke.MarkQuickNonCompliant(controller.Window);
+                                        reviewsStarted++;elapsed.Restart();timer.Start();return;
+                                    }catch(Exception error){rendered=false;Console.Error.WriteLine(error);}
+                                }
                                 controller.Window.Close();return;
                             }
                             if(!controller.HasRenderedPreview && elapsed.Elapsed<TimeSpan.FromSeconds(12))return;
@@ -94,13 +101,15 @@ namespace MediaReviewer {
                                     Smoke.CheckWideShell(controller.Window);
                                     Smoke.SaveGallery(controller.Window,Path.Combine(output,"workspace-dark.png"));
                                 }
-                                Smoke.SaveQuickReviewWithArrow(controller.Window);
-                                reviewStarted=true;elapsed.Restart();timer.Start();return;
+                                Smoke.CheckQuickNavigationAndMarkCompliant(controller.Window);
+                                reviewsStarted++;elapsed.Restart();timer.Start();return;
                             }}
                             catch(Exception error){rendered=false;Console.Error.WriteLine(error);}
                             controller.Window.Close();
                         };
-                        timer.Start();app.Run(controller.Window);return rendered ? 0 : 1;
+                        timer.Start();app.Run(controller.Window);
+                        if(rendered)Smoke.CheckSavedQuickReviews(args[1]);
+                        return rendered ? 0 : 1;
                     }
                     return app.Run(controller.Window);
                 }

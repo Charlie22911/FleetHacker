@@ -89,7 +89,7 @@ namespace MediaReviewer {
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
-            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and catalog tools. Use the arrows at the panel edges to collapse or reopen them. Drag the preview divider above or below its arrow to resize it.\n\nDouble-click an item or choose Quick Review. Swipe, drag or press Left on the focused image for Non-compliant, or Right for Compliant. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
+            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and catalog tools. Use the arrows at the panel edges to collapse or reopen them. Drag the preview divider above or below its arrow to resize it.\n\nDouble-click an item or choose Quick Review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
             Click("AboutButton",About);
             SetUpWorkspace(persistWorkspace);
             UpdateControls();
@@ -229,8 +229,14 @@ namespace MediaReviewer {
 
         void ClearCards(){CancelQuickGesture();ResetQuickPreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
         void Remove(CardItem card){
-            if(display==ReviewView.Quick && ReferenceEquals(card,QuickCard())){CancelQuickGesture();ResetQuickPreview();}
-            card.PropertyChanged-=CardChanged;cards.Remove(card);
+            int index=cards.IndexOf(card);
+            if(index<0)return;
+            if(display==ReviewView.Quick){
+                int current=QuickPosition;
+                if(index==current){CancelQuickGesture();ResetQuickPreview();}
+                if(index<current)quickIndex=current-1;
+            }
+            card.PropertyChanged-=CardChanged;cards.RemoveAt(index);
         }
         void CardChanged(object sender,PropertyChangedEventArgs e){if((e.PropertyName=="IsSelected" || e.PropertyName=="CanSelect") && !selection.Updating)UpdateControls();}
         void CardClick(object sender,RoutedEventArgs e) {
