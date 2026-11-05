@@ -2,6 +2,8 @@
 
 Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for finding and reviewing images and videos in large folder collections. The light and dark WPF workspace has List, Thumbnails and Quick Review views, a review sidebar, and a preview pane.
 
+[Download the FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copying the executable is sufficient on a machine with that Windows component. The application runs offline. SQLite, FFmpeg and dav1d are statically linked, the WPF application and licenses are embedded, and preview isolation runs a second instance of the same executable. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
 
 ## Open a catalog and scan
