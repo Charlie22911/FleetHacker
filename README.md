@@ -2,7 +2,9 @@
 
 Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for finding and reviewing images and videos in large folder collections. The light and dark WPF workspace has List, Thumbnails and Quick Review views, a review sidebar, and a preview pane.
 
-[Download the FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+[Download a GitHub preview](https://github.com/Charlie22911/FleetHacker/releases) or [view the FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+
+Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the catalog and manual review tools. The optional AI draft check reads separate model weights. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
 
@@ -52,7 +54,13 @@ Choose **Edit Gemma search criteria** under **AI draft check** to define what Ge
 
 Gemma loads in the background after you open a catalog on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the catalog’s saved rubric and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Select **CPU only** under **Gemma processing device** to skip GPU probing. The catalog remembers this choice and reuses saved scores across both modes. GPU mode uses the existing Windows graphics driver and remains offline.
 
-The draft check reads saved previews from the local catalog and runs in a private worker from the same executable. It requires no connection to the media source and makes no network requests. It covers still images with usable saved previews. The model score reflects the preview and should be used to prioritize manual review.
+The draft check runs locally in a private worker from the same executable. Still images use the saved catalog preview and can be scored with the source disconnected. The AI model makes no network requests.
+
+### Video and GIF draft review
+
+In **0.3.23-preview** and later, both Marqo and Gemma can also review cataloged videos and GIFs with a usable saved preview and an accessible original source. Connect the media source before running the draft. The check samples up to five frames from a video and three from one GIF pass, spaced across the known duration. Identical encoded frames are scored once. The highest frame score determines the item's priority, and you can review it in **AI suggestions**.
+
+The run summary counts motion items it could not read. Reconnect the source and run the draft again to retry them. Frame sampling can miss brief events between samples, so use the score to prioritize manual review.
 
 ## Command-line use
 
