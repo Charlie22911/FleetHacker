@@ -1,4 +1,4 @@
-# Media Compliance Reviewer for Windows
+# Local AI Assisted Media Compliance Reviewer for Windows
 
 Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for finding and reviewing images and videos in large folder collections. The light and dark WPF workspace has List, Thumbnails and Quick Review views, a review sidebar, and a preview pane.
 
