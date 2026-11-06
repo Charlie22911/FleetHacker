@@ -6,6 +6,8 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
+Thanks to Jeremy Gerdes and the Phoenix LAI contributors for their work on local Gemma and Vulkan on Windows. [Phoenix LAI](https://github.com/fleethacker-data-crucible/phoenix-lai), [MIT license](https://github.com/fleethacker-data-crucible/phoenix-lai/blob/ca1b88a99bc5825c74d9ad8018422b1bc06df968/LICENSE).
+
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the catalog and manual review tools. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
 
 ## Download Gemma for advanced AI review
