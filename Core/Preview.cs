@@ -6,8 +6,11 @@ namespace MediaReviewer {
         public byte[] Bytes;public int Width,Height,SourceWidth,SourceHeight;public string Mime="image/jpeg",Decoder="libvips";
     }
     public static class Preview {
-        static readonly object hostGate=new object(),savedGate=new object();static DecoderHost host,savedHost;
-        public static void Shutdown(){lock(hostGate){if(host!=null){host.Dispose();host=null;}}lock(savedGate){if(savedHost!=null){savedHost.Dispose();savedHost=null;}}}
+        static readonly object hostGate=new object(),savedGate=new object();static DecoderHost host,savedHost,inspectionHost;
+        public static void Shutdown(){
+            lock(hostGate){if(host!=null){host.Dispose();host=null;}if(inspectionHost!=null){inspectionHost.Dispose();inspectionHost=null;}}
+            lock(savedGate){if(savedHost!=null){savedHost.Dispose();savedHost=null;}}
+        }
         internal static PreviewResult CreateSaved(byte[] bytes,CancellationToken token){
             token.ThrowIfCancellationRequested();DecoderHost current;lock(savedGate){if(savedHost==null)savedHost=new DecoderHost(Native.RuntimeDirectory,30000,192);current=savedHost;}
             return current.CreateSaved(bytes,token);
@@ -28,7 +31,17 @@ namespace MediaReviewer {
         }
         internal static PreviewResult CreateExpectedScoped(string path,long size,long ticks,string identity,int side,int limit,CancellationToken token,string root){
             if(Archives.IsPath(path))return Archives.Preview(path,size,ticks,identity,side,limit,token,root);
-            token.ThrowIfCancellationRequested();DecoderHost current;lock(hostGate){if(host==null)host=new DecoderHost(Native.RuntimeDirectory);current=host;}
+            token.ThrowIfCancellationRequested();
+            DecoderHost current;
+            lock(hostGate){
+                if(limit==InspectionPlan.EncodedLimit){
+                    if(inspectionHost==null)inspectionHost=new DecoderHost(Native.RuntimeDirectory);
+                    current=inspectionHost;
+                }else{
+                    if(host==null)host=new DecoderHost(Native.RuntimeDirectory);
+                    current=host;
+                }
+            }
             return current.CreateScoped(path,size,ticks,identity,side,limit,token,root);
         }
     }

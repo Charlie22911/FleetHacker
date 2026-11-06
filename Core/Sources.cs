@@ -15,6 +15,33 @@ namespace MediaReviewer {
         internal long Cost {get{return 512+Items.Sum(x=>128L+2*(x.State.Length+x.Error.Length));}}
     }
     public static partial class Catalog {
+        internal static IEnumerable<object[]> RecordedSources(SqliteConnection db,long group,long content,bool allowHistorical,CancellationToken token) {
+            const string select=@"SELECT r.path,o.path,o.size,o.modified_ticks,o.file_identity,o.id,o.occurrence_order,
+ c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling=''
+ FROM review_groups g JOIN contents c ON c.id=g.content_id JOIN group_occurrences o ON o.group_id=g.id JOIN source_roots r ON r.id=o.root_id
+ WHERE g.id=?1 AND g.content_id=?2 AND g.retired=0 AND g.status<>'EVIDENCE'
+ AND (o.superseded=0 OR (?3=1 AND NOT EXISTS
+ (SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0)))";
+            token.ThrowIfCancellationRequested();
+            var preferred=db.Query(select+" ORDER BY "+SourceOrder("o")+" LIMIT 1",new object[]{group,content,allowHistorical},1);
+            if(preferred.Count==0)yield break;
+            var first=preferred[0];
+            yield return first;
+            // A sampled candidate can represent different files. Only an exact card can fall back.
+            if((long)first[7]==0)yield break;
+            long after=0;
+            while(true){
+                token.ThrowIfCancellationRequested();
+                var page=db.Query(select+" AND o.occurrence_order>?4 AND o.id<>?5 ORDER BY o.occurrence_order LIMIT 16",
+                    new object[]{group,content,allowHistorical,after,first[5]},16);
+                if(page.Count==0)yield break;
+                foreach(var source in page){
+                    token.ThrowIfCancellationRequested();
+                    after=(long)source[6];
+                    yield return source;
+                }
+            }
+        }
         internal static void PreviewTransaction(SqliteConnection db,Action body){db.Execute("BEGIN IMMEDIATE");try{body();db.Execute("COMMIT");}catch{Rollback(db);throw;}}
         internal static void TrimPreviewHistory(SqliteConnection db,string keep){db.Execute("DELETE FROM preview_retry_batches WHERE id IN(SELECT id FROM preview_retry_batches WHERE state IN('complete','complete_errors','discarded') AND id<>? ORDER BY created_at DESC,id DESC LIMIT 1 OFFSET 19)",keep);}
         internal static PreviewRetryBatch RetryStatus(SqliteConnection db,string batch,bool items){
@@ -67,10 +94,22 @@ namespace MediaReviewer {
                 WaitWrite(w=>{w.Execute("UPDATE preview_retry_items SET state='running',error='' WHERE id=? AND state='pending'",jobId);Catalog.Bump(w);return null;});
                 object[] source=null;string path="",error="";PreviewResult preview=null;
                 try{
-                    var rows=reader.Query("SELECT r.path,o.path,o.size,o.modified_ticks,o.file_identity,o.id FROM review_groups g JOIN group_occurrences o ON o.group_id=g.id JOIN source_roots r ON r.id=o.root_id WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' ORDER BY "+Catalog.SourceOrder("o")+" LIMIT 1",new object[]{group,content},1);
-                    if(rows.Count==0)throw new InvalidDataException("No ordinary source location is available; Evidence originals remain protected.");source=rows[0];path=Catalog.PreviewSourcePath((string)source[0],(string)source[1]);
-                    for(int attempt=0;;attempt++)try{token.ThrowIfCancellationRequested();preview=Preview.CreateExpectedScoped(path,(long)source[2],(long)source[3],(string)source[4],256,32768,token,(string)source[0]);break;}catch(Exception failure){if(failure is OperationCanceledException || !FileAccessNative.Transient(failure) || attempt>=3)throw;int retry=attempt+1;WaitWrite(w=>{Catalog.Log(w,"retry","Preview retry",path,"Retry "+retry+"/3: "+failure.Message);return null;},2048+path.Length*2L);if(token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))token.ThrowIfCancellationRequested();}
-                }catch(OperationCanceledException){throw;}catch(Exception failure){error=failure.GetType().Name+": "+failure.Message;if(error.Length>2048)error=error.Substring(0,2048);}
+                    foreach(var candidate in Catalog.RecordedSources(reader,group,content,true,token)){
+                        source=candidate;
+                        try{
+                            path=Catalog.PreviewSourcePath((string)source[0],(string)source[1]);
+                            VerificationRetry(()=>preview=Preview.CreateExpectedScoped(path,(long)source[2],(long)source[3],
+                                (string)source[4],256,32768,token,(string)source[0]),path,token);
+                            error="";
+                            break;
+                        }catch(Exception failure){
+                            if(!FileAccessNative.IsSourceFailure(failure))throw;
+                            error=FileAccessNative.Describe(failure);
+                            if(error.Length>2048)error=error.Substring(0,2048);
+                        }
+                    }
+                    if(source==null)error="No ordinary source location is available. Evidence originals remain protected.";
+                }catch(InvalidDataException failure){error=failure.Message;if(error.Length>2048)error=error.Substring(0,2048);}
                 token.ThrowIfCancellationRequested();FinishPreviewRetry(jobId,group,content,source,path,preview,error);done++;progress(done,initial.Total,"finished previews");
             }
             WaitWrite(w=>{Catalog.PreviewTransaction(w,()=>{w.Execute("UPDATE preview_retry_batches SET state=CASE WHEN EXISTS(SELECT 1 FROM preview_retry_items WHERE batch_id=? AND state='failed') THEN 'complete_errors' ELSE 'complete' END WHERE id=?",batch,batch);Catalog.TrimPreviewHistory(w,batch);});return null;});return PreviewSummary(Catalog.RetryStatus(reader,batch,false));
@@ -79,7 +118,10 @@ namespace MediaReviewer {
         static string PreviewSummary(PreviewRetryBatch value){return "Preview task: "+value.Saved+" saved, "+value.Failed+" failed, "+value.Total+" selected. Good existing previews and review decisions are preserved.";}
         void FinishPreviewRetry(long job,long group,long content,object[] source,string path,PreviewResult preview,string error){
             WaitWrite(w=>{Catalog.PreviewTransaction(w,()=>{
-                if(preview!=null && (source==null || w.Scalar("SELECT 1 FROM review_groups g JOIN group_occurrences o ON o.group_id=g.id JOIN source_roots r ON r.id=o.root_id WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND r.path=? AND o.id=? AND o.size=? AND o.modified_ticks=? AND o.file_identity IS ? LIMIT 1",group,content,source[0],source[5],source[2],source[3],source[4])==null)){preview=null;error="Recorded source or identity changed before preview publication; rescan before retrying.";}
+                if(preview!=null && (source==null || w.Scalar(@"SELECT 1 FROM review_groups g JOIN group_occurrences o ON o.group_id=g.id JOIN source_roots r ON r.id=o.root_id
+ WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND r.path=? AND o.id=? AND o.size=? AND o.modified_ticks=? AND o.file_identity IS ?
+ AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0)) LIMIT 1",
+                    group,content,source[0],source[5],source[2],source[3],source[4])==null)){preview=null;error="Recorded source or identity changed before preview publication; rescan before retrying.";}
                 if(preview!=null)w.Execute("INSERT INTO previews(content_id,state,mime,width,height,bytes,error,decoder,revision) VALUES(?,'available',?,?,?,?,NULL,?,1) ON CONFLICT(content_id) DO UPDATE SET state='available',mime=excluded.mime,width=excluded.width,height=excluded.height,bytes=excluded.bytes,error=NULL,decoder=excluded.decoder,revision=previews.revision+1",content,preview.Mime,preview.Width,preview.Height,preview.Bytes,preview.Decoder);
                 else{if(error.Length==0)error="Preview unavailable; the fingerprint and any saved preview are retained.";w.Execute("INSERT INTO previews(content_id,state,error,decoder) VALUES(?,'unavailable',?,'Selected preview retry') ON CONFLICT(content_id) DO UPDATE SET state='unavailable',error=excluded.error WHERE previews.state<>'available'",content,error);Catalog.Log(w,"warning","Preview retry",path,error);}
                 w.Execute("UPDATE preview_retry_items SET state=?,error=? WHERE id=? AND state='running'",preview!=null ? "saved" : "failed",error,job);Catalog.Bump(w);

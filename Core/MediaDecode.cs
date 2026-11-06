@@ -10,7 +10,8 @@ namespace MediaReviewer {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int ReadBytes(IntPtr state,IntPtr buffer,int count);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate long SeekBytes(IntPtr state,long offset,int origin);
         [StructLayout(LayoutKind.Sequential)] struct Input { public ReadBytes Read;public SeekBytes Seek;public IntPtr State; }
-        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int DecodeFrame(string format,ref Input input,[Out] byte[] pixels,int side,
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr AllocatePixels(int width,int height,int stride,int capacity);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int DecodeFrame(string format,ref Input input,AllocatePixels allocate,int side,int maxPixels,out int stride,
             out int width,out int height,out int sourceWidth,out int sourceHeight,out int rotation);
 
         internal static PreviewResult CreateSavedWebp(byte[] bytes) {
@@ -53,6 +54,7 @@ namespace MediaReviewer {
                 case "mkv":case "webm":return "matroska";
                 case "wmv":return "asf";
                 case "avi":return "avi";
+                case "flv":return "flv";
                 case "mpeg":case "mpg":case "mpe":return "mpeg";
                 case "ts":case "m2ts":case "mts":return "mpegts";
                 case "webp":return "webp_pipe";
@@ -62,18 +64,38 @@ namespace MediaReviewer {
 
         static PreviewResult Linked(Stream source,string format,int side,int limit) {
             var decode=Native.Export<DecodeFrame>("mcr_decode");
-            int bounded=Math.Min(side,(int)Math.Sqrt(InspectionPlan.MaxPixels));
             var scratch=new byte[65536];Exception ioError=null;
             var input=new Input {
                 Read=(state,address,count)=>{try{int read=source.Read(scratch,0,Math.Min(scratch.Length,count));Marshal.Copy(scratch,0,address,read);return read;}catch(Exception e){ioError=e;return -1;}},
                 Seek=(state,offset,origin)=>{try{return origin==0x10000 ? source.Length : origin>=0 && origin<=2 ? source.Seek(offset,(SeekOrigin)origin) : -1;}catch(IOException){return -1;}}
             };
-            var pixels=new byte[checked(bounded*bounded*4+64)];int w,h,sw,sh,angle;
-            int result=decode(format,ref input,pixels,bounded,out w,out h,out sw,out sh,out angle);
-            GC.KeepAlive(input);
-            if(ioError!=null)throw ioError;
-            if(result!=0 || w<1 || h<1 || w>bounded || h>bounded)throw new InvalidDataException("Linked FFmpeg could not decode a bounded frame ("+result+").");
-            BitmapSource frame=BitmapSource.Create(w,h,96,96,PixelFormats.Bgra32,null,pixels,bounded*4);
+            byte[] pixels=null;
+            GCHandle pinned=new GCHandle();
+            int allocatedWidth=0,allocatedHeight=0,allocatedStride=0;
+            Exception allocationError=null;
+            AllocatePixels allocate=(width,height,stride,capacity)=>{
+                if(pixels!=null || width<1 || height<1 || width>side || height>side ||
+                    (long)width*height>InspectionPlan.MaxPixels || stride!=((width*4+63)&~63) ||
+                    capacity!=(long)stride*height+64)
+                    return IntPtr.Zero;
+                try{
+                    pixels=new byte[capacity];
+                    pinned=GCHandle.Alloc(pixels,GCHandleType.Pinned);
+                    allocatedWidth=width;allocatedHeight=height;allocatedStride=stride;
+                    return pinned.AddrOfPinnedObject();
+                }catch(Exception error){allocationError=error;return IntPtr.Zero;}
+            };
+            int w,h,sw,sh,angle,pitch;
+            BitmapSource frame;
+            try{
+                int result=decode(format,ref input,allocate,side,(int)InspectionPlan.MaxPixels,out pitch,out w,out h,out sw,out sh,out angle);
+                GC.KeepAlive(input);
+                if(ioError!=null)throw ioError;
+                if(allocationError!=null)throw allocationError;
+                if(result!=0 || pixels==null || w!=allocatedWidth || h!=allocatedHeight || pitch!=allocatedStride)
+                    throw new InvalidDataException("Linked FFmpeg could not decode a bounded frame ("+result+").");
+                frame=BitmapSource.Create(w,h,96,96,PixelFormats.Bgra32,null,pixels,pitch);
+            }finally{if(pinned.IsAllocated)pinned.Free();}
             if(angle!=0)frame=new TransformedBitmap(frame,new RotateTransform(angle));
             if(Math.Abs(angle)%180==90){int swap=sw;sw=sh;sh=swap;}
             return Encode(frame,sw,sh,side,limit,"Linked FFmpeg 9.0.2");

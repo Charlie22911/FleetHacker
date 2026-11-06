@@ -56,7 +56,16 @@ namespace MediaReviewer {
         public void Dispose(){if(disposed)return;EndDrag();disposed=true;timer.Tick-=Tick;scroll.PreviewMouseLeftButtonDown-=Down;scroll.PreviewMouseMove-=Move;scroll.PreviewMouseLeftButtonUp-=Up;scroll.LostMouseCapture-=Lost;scroll.PreviewKeyDown-=Key;cards.CollectionChanged-=Collection;Changed=null;}
         sealed class SelectionAdorner:Adorner {
             internal Rect Area;internal SelectionAdorner(UIElement owner):base(owner){IsHitTestVisible=false;ClipToBounds=true;}
-            protected override void OnRender(DrawingContext dc){dc.PushClip(new RectangleGeometry(new Rect(RenderSize)));dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(40,30,110,210)),new Pen(Brushes.DodgerBlue,1),Area);dc.Pop();}
+            protected override void OnRender(DrawingContext dc){
+                var fe=AdornedElement as FrameworkElement;
+                var focus=fe==null ? null : fe.TryFindResource("FocusBrush") as SolidColorBrush;
+                Color c=focus!=null ? focus.Color : Color.FromRgb(217,119,66);
+                var fill=new SolidColorBrush(Color.FromArgb(45,c.R,c.G,c.B));fill.Freeze();
+                var border=new SolidColorBrush(c);border.Freeze();
+                dc.PushClip(new RectangleGeometry(new Rect(RenderSize)));
+                dc.DrawRectangle(fill,new Pen(border,1.5),Area);
+                dc.Pop();
+            }
         }
     }
 }

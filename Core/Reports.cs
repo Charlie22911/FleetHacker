@@ -96,8 +96,8 @@ namespace MediaReviewer {
     }
     public sealed partial class ReviewerEngine {
         volatile bool reportActive;
-        internal Func<string,FileStream> reportFileFactory;
-        internal Action reportCompletionLog;
+        internal Func<string,FileStream> reportFileFactory=null;
+        internal Action reportCompletionLog=null;
         public bool ReportActive {get{return reportActive;}}
         void RequireReportWritable(){if(reportActive)throw new InvalidOperationException("A report is being exported. Wait or cancel it before changing reviews.");}
         public string RequestReport(ReportOptions options){

@@ -18,5 +18,7 @@
     <EmbeddedResource Include="native/reviewer.ico" LogicalName="Reviewer.ico" />
     <EmbeddedResource Include="native/COPYING.LGPLv2.1" LogicalName="COPYING.LGPLv2.1" />
     <EmbeddedResource Include="native/COPYING.dav1d" LogicalName="COPYING.dav1d" />
+    <EmbeddedResource Include="native/COPYING.draft-ai" LogicalName="COPYING.draft-ai" />
+    <EmbeddedResource Include="native/COPYING.gemma-runtime" LogicalName="COPYING.gemma-runtime" />
   </ItemGroup>
 </Project>

@@ -10,17 +10,38 @@ namespace MediaReviewer {
         internal string VerifiedCopySampleHash;
     }
     public sealed class PageRequest {
-        public long Generation; public string Bucket="TO_REVIEW",Search="",Folder="",Type="",RootId="",Sort="found";
+        public bool GemmaAvailable;
+        internal bool UseGemma;
+        internal string AiScoreModel=DraftReview.Model;
+        public long Generation; public string Bucket="TO_REVIEW",Search="",Folder="",Type="",Filter="",RootId="",Sort="found";
         public bool? SortDescending;
-        public int Page=1,PageSize=60; public long[] ExistingIds=new long[0];
-        internal PageRequest Copy() { var c=(PageRequest)MemberwiseClone(); c.ExistingIds=(long[])ExistingIds.Clone(); return c; }
+        public int Page=1,PageSize=60;
+        internal Dictionary<long,PreviewVersion> CachedPreviews;
+        internal PageRequest Copy() {
+            var copy=(PageRequest)MemberwiseClone();
+            if(CachedPreviews!=null)copy.CachedPreviews=new Dictionary<long,PreviewVersion>(CachedPreviews);
+            return copy;
+        }
+    }
+    internal struct PreviewVersion {
+        readonly long content,revision;
+        internal PreviewVersion(MediaRow row){content=row.ContentId;revision=row.PreviewRevision;}
+        internal bool Matches(MediaRow row){return content==row.ContentId && revision==row.PreviewRevision;}
     }
     public sealed class ReviewRequest {
         public Dictionary<long,long> ExpectedRevisions;
         public string OperationId,Status,Reviewer="",Notes=""; public long[] GroupIds;
         internal ReviewRequest Copy() { var c=(ReviewRequest)MemberwiseClone(); c.GroupIds=GroupIds==null ? null : (long[])GroupIds.Clone();c.ExpectedRevisions=ExpectedRevisions==null ? null : new Dictionary<long,long>(ExpectedRevisions);return c; }
     }
+    internal sealed class ReviewUndoItem {
+        internal long GroupId,PriorRevision,ExpectedRevision;
+        internal string Status,Reviewer,Notes;
+        internal long Cost {get{return 256+2L*(Reviewer.Length+Notes.Length);}}
+        internal ReviewUndoItem Copy(){return (ReviewUndoItem)MemberwiseClone();}
+    }
     public sealed class MediaRow {
+        public double? AiScore;
+        public bool AiGemma;
         public long GroupId,ContentId,Sequence,Size,LocationCount,ModifiedTicks;
         public long ReviewRevision,PreviewRevision;
         public string PreviewRetryState;
@@ -31,12 +52,19 @@ namespace MediaReviewer {
     }
     public sealed class PageData {
         public List<MediaRow> Rows=new List<MediaRow>(); public long Total,Revision;
+        public long AiTotal;
+        public int AiThreshold=DraftReview.DefaultMarqoThreshold;
+        public int MarqoThreshold=DraftReview.DefaultMarqoThreshold,GemmaThreshold=DraftReview.DefaultGemmaThreshold;
+        public bool GemmaCpuOnly;
+        public string GemmaCriteria="";
+        public bool UseGemma;
         public long[] Totals=new long[4]; public int Page,PageSize;
-        public bool Refill;
     }
     public sealed class UiResult {
         public string RequestId,Kind,Error,OperationId,Value; public long Generation;
         public bool Success,Reconciled; public PageData Page; public long[] GroupIds;
+        internal bool ProtectedDetails;
+        internal Dictionary<long,long> ReviewRevisions;
         public IdentityResolutionPreview IdentityPreview;
         public InspectorData Inspector;public LocationPage Locations;
         public ReviewPreferences Preferences;

@@ -15,8 +15,9 @@ using Microsoft.Win32;
 
 namespace MediaReviewer {
     sealed partial class ReviewerWindow:IDisposable {
-        static readonly string[] BucketNames={"To be reviewed","Compliant","Non-compliant","Evidence"};
-        static readonly string[] BucketKeys={"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"};
+        static readonly string[] BucketNames={"To be reviewed","Compliant","Non-compliant","Evidence","AI suggestions"};
+        static readonly string[] BucketIcons={"📥  ","🌿  ","🚩  ","🔒  ","◇  "};
+        static readonly string[] BucketKeys={"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE",DraftReview.Bucket};
         readonly ObservableCollection<CardItem> cards=new ObservableCollection<CardItem>();
         readonly Dictionary<string,Action<UiResult>> pending=new Dictionary<string,Action<UiResult>>();
         readonly HashSet<Window> databaseWindows=new HashSet<Window>();
@@ -26,13 +27,24 @@ namespace MediaReviewer {
         readonly ViewGeneration view=new ViewGeneration();
         readonly ViewGeneration inspection=new ViewGeneration();
         readonly ReviewPreferences options=new ReviewPreferences();
+        readonly List<UndoEntry> undoStack=new List<UndoEntry>();
+        sealed class UndoEntry {
+            internal ReviewUndoItem[] Items;
+            internal string OperationId;
+            internal long Cost;
+        }
+        bool undoInFlight;
         ReviewerEngine engine,closingDatabase;
         StatusSnapshot status;
-        string pageRequest,task,preferencesSignature;
+        string pageRequest,task,draftTask,preferencesSignature;
         ReviewPreferences savedPreferences;
-        bool closing,allowClose,refresh,refillRequested,loadedPreferences,waitingOnClosePreference,switchingCatalog;
+        bool closing,allowClose,refresh,loadedPreferences,waitingOnClosePreference,switchingCatalog;
+        long pageCommitVersion;
+        string pageSearch="",pageFolder="";
         DateTime? databaseClosedAt;
-        int bucket,page=1,pageCount=1;
+        string gemmaCriteria="";
+        int bucket,page=1,pageCount=1,marqoThreshold=DraftReview.DefaultMarqoThreshold,gemmaThreshold=DraftReview.DefaultGemmaThreshold;
+        bool gemmaAvailable,useGemma,gemmaCpuOnly,gemmaSettingsLoaded;
         long revision=-1;
         Window inspector;
         Action<MediaLoadResult> showInspection;
@@ -61,6 +73,7 @@ namespace MediaReviewer {
             Click("BrowseButton",()=>{string selected=ChooseFolder("Choose a media source",Box("SourceBox").Text);if(selected!=null)Box("SourceBox").Text=selected;});
             Click("StartButton",StartScan);Click("ResumeButton",()=>engine.ResumeScan(status.ResumeId,Number("WorkerBox")));
             Click("CancelButton",()=>engine.CancelScan());
+            Click("AiDraftButton",ShowDraftReview);
             Click("FormatsButton",ChooseFormats);Click("OptionsButton",ChooseOptions);
             foreach(FormatFamily family in Formats.Families)Combo("TypeBox").Items.Add(new ComboBoxItem {Content=family.Label,Tag=family.Key});
             Combo("ViewBox").SelectionChanged+=(s,e)=>{if(Combo("ViewBox").SelectedIndex>=0){bucket=Combo("ViewBox").SelectedIndex;NewPage(1);}};
@@ -71,10 +84,17 @@ namespace MediaReviewer {
             Combo("PageSizeBox").SelectionChanged+=(s,e)=>NewPage(1);
             Combo("SortBox").SelectionChanged+=(s,e)=>{columnSort=null;NewPage(1);};
             Combo("TypeBox").SelectionChanged+=(s,e)=>NewPage(1);
+            Combo("SmartFilterBox").SelectionChanged+=(s,e)=>NewPage(1);
             Combo("FitBox").SelectionChanged+=(s,e)=>SetFit();
             Click("SelectPageButton",()=>SelectAll(true));Click("ClearSelectionButton",()=>SelectAll(false));
             Click("CompliantButton",()=>ReviewWorkspaceItems("COMPLIANT"));Click("UnreviewedButton",()=>ReviewWorkspaceItems("TO_REVIEW"));
             Click("NonCompliantButton",()=>ReviewWorkspaceItems("NON_COMPLIANT"));Click("CaptureEvidenceButton",()=>ReviewWorkspaceItems("EVIDENCE"));
+            Click("UndoReviewButton",UndoLastReview);
+            foreach(string tagBtn in new[]{"NoteTagPersonalButton","NoteTagUnauthorizedButton","NoteTagRenamedButton","NoteTagGameButton","NoteTagFollowUpButton"}){
+                string btnName=tagBtn;
+                Click(btnName,()=>AppendNoteTag(Box("NotesBox"),(string)Button(btnName).Tag));
+            }
+            Click("ClearNotesButton",()=>Box("NotesBox").Clear());
             Click("RetryPreviewsButton",()=>Work(engine.RequestPreviewRetry(Selected().Select(c=>c.Record.GroupId).ToArray()),"Preview retry"));
             Click("VaultButton",()=>{if(engine.VaultUnlocked){if(protectedWindow!=null)protectedWindow.Close();Work(engine.RequestVaultLock(),"Lock originals");}else Unlock(null);});
             Click("StoredOriginalButton",()=>Original(Selected().Single().Record));
@@ -85,7 +105,7 @@ namespace MediaReviewer {
             Click("VerifyButton",()=>Verify(Selected().Single().Record));
             Click("IdentityHistoryButton",()=>Work(engine.RequestIdentityHistory(Selected().Single().Record.GroupId),"Identity history",r=>ShowText("Identity history",r.Value)));
             Click("LogButton",()=>Queue(engine.RequestLog(),r=>{if(r.Success)ShowText("Log",r.Value);else Message(r.Error);}));
-            Click("CancelWorkButton",()=>{if(task!=null)engine.CancelOperation(task);});
+            Click("CancelWorkButton",()=>{string active=draftTask??task;if(active!=null)engine.CancelOperation(active);});
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
@@ -99,13 +119,18 @@ namespace MediaReviewer {
         void Click(string name,Action action){Button(name).Click+=(s,e)=>Guard(action);}
         void SetUpCommandSections() {
             Action summarize=()=>{
-                Get<Expander>("ScanSettingsExpander").Header="Scan settings · "+((ComboBoxItem)Combo("ModeBox").SelectedItem).Content+" · "+Number("WorkerBox")+" workers"+(Box("AgeBox").Text.Trim()=="0" ? "" : " · age limit");
+                string mode=(string)((ComboBoxItem)Combo("ModeBox").SelectedItem).Content;
+                int workers=Number("WorkerBox");
+                string age=Box("AgeBox").Text.Trim();
+                Get<Expander>("ScanSettingsExpander").Header="Scan settings · "+mode+" · "+workers+" workers"+(age=="0" ? "" : " · age limit");
+                Button("ScanCogButton").Content="⚙ "+mode+" · "+workers+"w"+(age=="0" ? "" : " · ≤"+age+"y");
                 var type=Combo("TypeBox").SelectedItem as ComboBoxItem;
+                var smart=Combo("SmartFilterBox").SelectedItem as ComboBoxItem;
                 var sort=Combo("SortBox").SelectedItem as ComboBoxItem;
-                Get<Expander>("FiltersExpander").Header="Filters and display · "+(type==null ? "All types" : type.Content)+" · "+(sort==null ? "First found" : sort.Content)+(String.IsNullOrWhiteSpace(Box("FolderBox").Text) ? "" : " · folder filter");
+                Get<Expander>("FiltersExpander").Header="Filters and display · "+(type==null ? "All types" : type.Content)+(smart!=null && !String.IsNullOrEmpty((string)smart.Tag) ? " · "+smart.Content : "")+" · "+(sort==null ? "First found" : sort.Content)+(String.IsNullOrWhiteSpace(Box("FolderBox").Text) ? "" : " · folder filter");
                 Get<Expander>("ReviewNotesExpander").Header="Reviewer and notes · "+(String.IsNullOrWhiteSpace(Box("ReviewerBox").Text) ? "No reviewer label" : Box("ReviewerBox").Text)+(String.IsNullOrWhiteSpace(Box("NotesBox").Text) ? "" : " · notes entered");
             };
-            foreach(string name in new[]{"ModeBox","WorkerBox","TypeBox","SortBox"})Combo(name).SelectionChanged+=(s,e)=>summarize();
+            foreach(string name in new[]{"ModeBox","WorkerBox","TypeBox","SmartFilterBox","SortBox"})Combo(name).SelectionChanged+=(s,e)=>summarize();
             foreach(string name in new[]{"AgeBox","FolderBox","ReviewerBox","NotesBox"})Box(name).TextChanged+=(s,e)=>summarize();
             Box("FolderBox").KeyDown+=(s,e)=>{if(e.Key==Key.Enter){e.Handled=true;NewPage(1);}};
             // Keep a useful gallery area even with several sections open on a short screen.
@@ -172,8 +197,10 @@ namespace MediaReviewer {
         void StartOpen(string path,bool create,string html) {
             if(inspector!=null)inspector.Close();
             if(protectedWindow!=null)protectedWindow.Close();
-            ClearCards();pending.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;refillRequested=false;
+            ClearCards();pending.Clear();undoStack.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;
             Combo("ViewBox").SelectedIndex=0;
+            marqoThreshold=DraftReview.DefaultMarqoThreshold;gemmaThreshold=DraftReview.DefaultGemmaThreshold;gemmaCriteria="";useGemma=false;gemmaCpuOnly=false;gemmaSettingsLoaded=false;gemmaAvailable=DraftModelWorker.GemmaAvailable();
+            pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
             refresh=true;loadedPreferences=false;preferencesSignature=null;savedPreferences=null;offeredImport=false;
             options.DefaultSourceRoot="";Box("SourceBox").Clear();
             engine=html==null ? ReviewerEngine.Open(path,create) : ReviewerEngine.ImportHtml(html,path);
@@ -223,36 +250,70 @@ namespace MediaReviewer {
         void SelectAll(bool value){foreach(CardItem card in cards)if(card.CanSelect)card.IsSelected=value;UpdateControls();}
         CardItem[] Selected(){if(display==ReviewView.Quick){var card=QuickCard();return card!=null && card.CanSelect ? new[]{card} : new CardItem[0];}return cards.Where(c=>c.IsSelected && c.CanSelect).ToArray();}
         void SetFit(){var style=new Style(typeof(Image));style.Setters.Add(new Setter(Image.StretchProperty,Tag("FitBox")=="Uniform" ? Stretch.Uniform : Stretch.UniformToFill));style.Setters.Add(new Setter(Image.HorizontalAlignmentProperty,HorizontalAlignment.Center));style.Setters.Add(new Setter(Image.VerticalAlignmentProperty,VerticalAlignment.Center));Window.Resources["ThumbnailStyle"]=style;}
-        void ResetView(){Box("SearchBox").Clear();Box("FolderBox").Clear();columnSort=null;Combo("TypeBox").SelectedIndex=0;Combo("SortBox").SelectedIndex=0;Combo("FitBox").SelectedIndex=0;NewPage(1);}
+        void ResetView(){Box("SearchBox").Clear();Box("FolderBox").Clear();columnSort=null;Combo("TypeBox").SelectedIndex=0;Combo("SmartFilterBox").SelectedIndex=0;Combo("SortBox").SelectedIndex=0;Combo("FitBox").SelectedIndex=0;UpdateColumnHeaders();NewPage(1);}
         void GoToPage(){int requested;if(!Int32.TryParse(Box("PageBox").Text,out requested) || requested<1 || requested>pageCount)throw new ArgumentException("Enter a page from 1 to "+pageCount+".");NewPage(requested);}
-        void NewPage(int target){if(!Ready)return;page=Math.Max(1,target);quickIndex=0;view.Advance();refresh=true;refillRequested=false;ClearCards();Get<ScrollViewer>("GalleryScroll").ScrollToTop();}
-
-        void ReadPage(bool refill) {
-            var request=new PageRequest {Generation=view.Current,Bucket=BucketKeys[bucket],Page=page,PageSize=Number("PageSizeBox"),
-                Search=Box("SearchBox").Text,Folder=Box("FolderBox").Text,Type=Tag("TypeBox"),Sort=columnSort??Tag("SortBox"),SortDescending=columnSort==null ? (bool?)null : columnDescending,
-                ExistingIds=refill ? cards.Select(c=>c.Record.GroupId).ToArray() : new long[0]};
-            pageRequest=engine.RequestPage(request);refresh=false;refillRequested=false;
-            Queue(pageRequest,r=>{pageRequest=null;if(!view.Accept(r.Generation))return;if(r.Success)ApplyPage(r.Page);else Message(r.Error);});
+        void NewPage(int target){
+            if(!Ready)return;
+            pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
+            page=Math.Max(1,target);quickIndex=0;view.Advance();refresh=true;
+            ClearCards();Get<ScrollViewer>("GalleryScroll").ScrollToTop();
         }
 
-        void ApplyPage(PageData result) {
+        void ReadPage() {
+            var request=new PageRequest {Generation=view.Current,Bucket=BucketKeys[bucket],Page=page,PageSize=Number("PageSizeBox"),
+                Search=pageSearch,Folder=pageFolder,Type=Tag("TypeBox"),Filter=Tag("SmartFilterBox"),Sort=columnSort??Tag("SortBox"),SortDescending=columnSort==null ? (bool?)null : columnDescending,GemmaAvailable=gemmaAvailable,
+                CachedPreviews=cards.Where(c=>c.Image!=null || c.Record.PreviewBytes!=null)
+                    .ToDictionary(c=>c.Record.GroupId,c=>new PreviewVersion(c.Record))};
+            long commitVersion=pageCommitVersion;
+            pageRequest=engine.RequestPage(request);refresh=false;
+            Queue(pageRequest,r=>{
+                pageRequest=null;
+                if(!view.Accept(r.Generation) || commitVersion!=pageCommitVersion)return;
+                if(r.Success)ApplyPage(r.Page);else Message(r.Error);
+            });
+        }
+
+        internal void ApplyPage(PageData result) {
             revision=result.Revision;page=result.Page;
             pageCount=(int)Math.Max(1,Math.Min(Int32.MaxValue,(result.Total+result.PageSize-1)/result.PageSize));
             Box("PageBox").Text=page.ToString(CultureInfo.InvariantCulture);
             Text("PageLabel","Page "+page+" of "+pageCount+" · "+result.Total.ToString("N0")+" matching items");
-            for(int i=0;i<BucketNames.Length;i++)Button("Queue"+i).Content=((ComboBoxItem)Combo("ViewBox").Items[i]).Content=BucketNames[i]+" ("+result.Totals[i].ToString("N0")+")";
-            if(!result.Refill) {
-                var ids=new HashSet<long>(result.Rows.Select(row=>row.GroupId));
-                for(int i=cards.Count-1;i>=0;i--)if(!ids.Contains(cards[i].Record.GroupId))Remove(cards[i]);
+            marqoThreshold=result.MarqoThreshold;gemmaThreshold=result.GemmaThreshold;useGemma=result.UseGemma;gemmaCpuOnly=result.GemmaCpuOnly;gemmaCriteria=result.GemmaCriteria;gemmaSettingsLoaded=true;
+            Button("Queue4").ToolTip="Suggestions from "+(useGemma ? "Gemma 4 E2B" : "Marqo")+", highest score first by default.";
+            for(int i=0;i<BucketNames.Length;i++)Button("Queue"+i).Content=((ComboBoxItem)Combo("ViewBox").Items[i]).Content=BucketIcons[i]+BucketNames[i]+" ("+(i==4 ? result.AiTotal : result.Totals[i]).ToString("N0")+")";
+            var active=display==ReviewView.Quick ? QuickCard() : null;
+            MediaRow activeRow=active==null ? null : active.Record;
+            int previousPosition=active==null ? quickIndex : QuickPosition;
+            var ids=new HashSet<long>(result.Rows.Select(row=>row.GroupId));
+            var remaining=cards.Where(card=>ids.Contains(card.Record.GroupId)).ToDictionary(card=>card.Record.GroupId);
+            for(int i=cards.Count-1;i>=0;i--){
+                if(ids.Contains(cards[i].Record.GroupId))continue;
+                cards[i].PropertyChanged-=CardChanged;
+                cards.RemoveAt(i);
             }
+            int activePosition=-1;
             for(int i=0;i<result.Rows.Count;i++){
-                MediaRow row=result.Rows[i];CardItem card=cards.FirstOrDefault(c=>c.Record.GroupId==row.GroupId);
-                if(card==null){card=new CardItem(row);card.PropertyChanged+=CardChanged;cards.Insert(result.Refill ? cards.Count : i,card);}
-                else {card.Update(row);if(!result.Refill && cards.IndexOf(card)!=i)cards.Move(cards.IndexOf(card),i);}
+                MediaRow row=result.Rows[i];
+                CardItem card;
+                if(!remaining.TryGetValue(row.GroupId,out card)){
+                    card=new CardItem(row);card.PropertyChanged+=CardChanged;cards.Insert(i,card);
+                }else{
+                    card.Update(row);
+                    if(!ReferenceEquals(cards[i],card))cards.Move(cards.IndexOf(card),i);
+                }
+                if(activeRow!=null && activeRow.GroupId==row.GroupId && activeRow.ContentId==row.ContentId)activePosition=i;
+            }
+            // If the current item leaves the page, keep its slot or fall back to the last slot.
+            quickIndex=activePosition>=0 ? activePosition : Math.Min(previousPosition,Math.Max(0,cards.Count-1));
+            if(activeRow!=null && (activePosition<0 || !SamePreviewSource(activeRow,cards[activePosition].Record))){
+                CancelQuickGesture();
+                ResetQuickPreview();
             }
             Get<Border>("EmptyPanel").Visibility=cards.Count==0 ? Visibility.Visible : Visibility.Collapsed;
-            Text("EmptyTitle","No matching items");Text("EmptyText","Start a scan or change the current bucket and filters.");
-            if(cards.Count!=0)quickIndex=Math.Min(quickIndex,cards.Count-1);
+            bool filtered=!String.IsNullOrWhiteSpace(pageSearch) || !String.IsNullOrWhiteSpace(pageFolder) || !String.IsNullOrEmpty(Tag("TypeBox")) || !String.IsNullOrEmpty(Tag("SmartFilterBox"));
+            Text("EmptyTitle",bucket==3 && filtered ? "🔒 Evidence details require unlock" : "🎉 All clear in this view!");
+            Text("EmptyText",bucket==3 && filtered ? "Clear search and filters to browse Evidence items. Unlock a saved original to view its authenticated capture details." : "Nothing matches right now — try scanning a folder, switching spaces on the left, or clearing your filters.");
+            if(bucket==4 && cards.Count==0){Text("EmptyTitle","No matching AI suggestions");Text("EmptyText","Run an AI draft check on your catalog, adjust the threshold, or clear the active filters.");}
         }
 
         void ClearCards(){CancelQuickGesture();ResetQuickPreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
@@ -277,7 +338,9 @@ namespace MediaReviewer {
         void Review(string destination,CardItem[] chosen,Action<UiResult> done=null,string reviewer=null,string notes=null,Func<bool> stillIntended=null) {
             if(chosen.Length==0 || stillIntended!=null && !stillIntended())return;
             bool protectedChange=destination=="NON_COMPLIANT" || destination=="EVIDENCE" || chosen.Any(c=>c.Record.Status=="EVIDENCE");
+            if(protectedChange && engine.DraftReviewActive)throw new InvalidOperationException("Finish or cancel the AI draft check before saving a review that uses protected originals.");
             if(protectedChange && !engine.VaultUnlocked){
+                var catalog=engine;
                 long generationAtPrompt=view.Current;
                 var originalRows=chosen.Select(c=>c.Record).ToArray();
                 string label=reviewer??Box("ReviewerBox").Text, draft=notes??Box("NotesBox").Text;
@@ -285,12 +348,16 @@ namespace MediaReviewer {
                 Action release=()=>{foreach(var card in chosen)card.IsPending=false;};
                 Unlock(()=>{
                     release();
-                    if(!view.Accept(generationAtPrompt) || stillIntended!=null && !stillIntended() || chosen.Where((card,i)=>!card.CanSelect || card.Record.ContentId!=originalRows[i].ContentId || card.Record.ReviewRevision!=originalRows[i].ReviewRevision).Any()){
+                    if(!Ready || catalog!=engine || !view.Accept(generationAtPrompt) || stillIntended!=null && !stillIntended() || chosen.Where((card,i)=>!card.CanSelect || card.Record.ContentId!=originalRows[i].ContentId || card.Record.ReviewRevision!=originalRows[i].ReviewRevision).Any()){
                         Message("The selection or saved review changed while unlocking. Select the item again.");return;
                     }
                     Review(destination,chosen,done,label,draft,stillIntended);
                 },release);return;
             }
+            var undoSnapshots=chosen.Select(c=>new ReviewUndoItem {
+                GroupId=c.Record.GroupId,PriorRevision=c.Record.ReviewRevision,Status=c.Record.Status??"TO_REVIEW",
+                Reviewer=c.Record.Reviewer??"",Notes=c.Record.Notes??""
+            }).ToArray();
             var request=new ReviewRequest {Status=destination,OperationId=Id(),Reviewer=reviewer??Box("ReviewerBox").Text,Notes=notes??Box("NotesBox").Text,
                 GroupIds=chosen.Select(c=>c.Record.GroupId).ToArray(),ExpectedRevisions=chosen.ToDictionary(c=>c.Record.GroupId,c=>c.Record.ReviewRevision)};
             bool fromEvidence=chosen.Any(c=>c.Record.Status=="EVIDENCE");
@@ -302,12 +369,68 @@ namespace MediaReviewer {
             long generation=view.Current;
             Queue(id,r=>{
                 if(task==id)task=null;
+                if(r.Success)pageCommitVersion++;
                 foreach(CardItem card in chosen){card.IsPending=false;if(r.Success){card.IsSelected=false;if(view.Accept(generation) && destination!=BucketKeys[bucket])Remove(card);}}
                 Message(r.Success ? "Review saved." : "Review failed. Selection retained. "+r.Error);
-                if(r.Success){refresh=true;refillRequested=view.Accept(generation) && destination!=BucketKeys[bucket];}
+                if(destination=="EVIDENCE" && r.GroupIds!=null)
+                    foreach(var window in ordinaryDetails.Where(pair=>r.GroupIds.Contains(pair.Value)).Select(pair=>pair.Key).ToArray())
+                        window.Close();
+                if(r.Success){
+                    if(!fromEvidence && destination!="EVIDENCE")RememberUndo(undoSnapshots,r.ReviewRevisions);
+                    if(destination=="NON_COMPLIANT" && Get<CheckBox>("AutoClearNotesBox").IsChecked==true && notes==null)Box("NotesBox").Clear();
+                    refresh=true;
+                }
                 if(done!=null)done(r);
             });
             Message("Review pending…");
+        }
+
+        internal static void AppendNoteTag(TextBox box,string tag) {
+            if(box==null || String.IsNullOrWhiteSpace(tag) || box.IsReadOnly)return;
+            string current=(box.Text??"").Trim();
+            var parts=current.Length==0 ? new List<string>() : current.Split(new[]{';'},StringSplitOptions.RemoveEmptyEntries).Select(s=>s.Trim()).Where(s=>s.Length>0).ToList();
+            if(parts.Any(p=>String.Equals(p,tag,StringComparison.OrdinalIgnoreCase)))return;
+            parts.Add(tag);
+            string updated=String.Join("; ",parts);
+            if(updated.Length<=box.MaxLength || box.MaxLength<=0){box.Text=updated;box.CaretIndex=box.Text.Length;}
+        }
+
+        void RememberUndo(ReviewUndoItem[] items,Dictionary<long,long> revisions) {
+            long cost=2048+items.Sum(item=>item.Cost);
+            if(revisions==null || cost>ReviewerEngine.UndoQueueLimit || items.Any(item=>
+                !revisions.ContainsKey(item.GroupId) || item.Notes.Length>16384 || item.Reviewer.Length>128))return;
+            foreach(var item in items)item.ExpectedRevision=revisions[item.GroupId];
+            while(undoStack.Count>=32 || undoStack.Sum(entry=>entry.Cost)+cost>4L*1024*1024)
+                undoStack.RemoveAt(0);
+            undoStack.Add(new UndoEntry {Items=items,OperationId=Id(),Cost=cost});
+        }
+
+        void UndoLastReview() {
+            if(!Ready || undoInFlight || task!=null || undoStack.Count==0)return;
+            var entry=undoStack[undoStack.Count-1];
+            string request=engine.RequestUndoReview(entry.Items,entry.OperationId);
+            undoInFlight=true;
+            Message("Undo pending…");
+            Queue(request,r=>{
+                undoInFlight=false;
+                if(r.Success){
+                    pageCommitVersion++;
+                    int index=undoStack.IndexOf(entry);
+                    // Carry the revision back only if Undo restored the state written by the earlier review.
+                    if(r.ReviewRevisions!=null)
+                        foreach(var restored in entry.Items){
+                            var predecessor=undoStack.Take(Math.Max(0,index)).Reverse().SelectMany(e=>e.Items)
+                                .FirstOrDefault(item=>item.GroupId==restored.GroupId);
+                            if(predecessor!=null && predecessor.ExpectedRevision==restored.PriorRevision)
+                                predecessor.ExpectedRevision=r.ReviewRevisions[restored.GroupId];
+                        }
+                    undoStack.Remove(entry);
+                    refresh=true;
+                }
+                Message(r.Success ? "Review undone." : "Undo failed. "+r.Error);
+                UpdateControls();
+            });
+            UpdateControls();
         }
 
         void Tick() {
@@ -321,7 +444,7 @@ namespace MediaReviewer {
             UiResult result;
             for(int i=0;i<8 && engine.TryTakeResult(out result);i++)DispatchResult(result);
             if(Ready && !loadedPreferences){loadedPreferences=true;Guard(LoadPreferences);}
-            if(Ready && pageRequest==null && (refresh || status.Revision!=revision) && !selection.Dragging)Guard(()=>ReadPage(refillRequested && cards.Count>0));
+            if(Ready && pageRequest==null && (refresh || status.Revision>revision) && !selection.Dragging)Guard(ReadPage);
             for(int i=0;i<12;i++) {
                 MediaLoadResult media;if(!loader.TryTakeResult(out media))break;
                 if(media.Kind=="Inspect"){
@@ -335,15 +458,34 @@ namespace MediaReviewer {
             var focus=FocusedCard();
             IEnumerable<CardItem> toDecode=display==ReviewView.Thumbnails ? (IEnumerable<CardItem>)cards : focus==null ? new CardItem[0] : new[]{focus};
             foreach(CardItem card in toDecode)if(card.CanLoadImage){if(!loader.QueueThumbnail(card.Record.GroupId,card.Record.ContentId,view.Current,card.Record.PreviewBytes,card.Record.PreviewRevision))break;card.ImageQueued=true;}
-            if(Ready)Guard(LoadQuickPreview);
-            var progress=task==null ? null : engine.GetOperationProgress(task);
+            if(Ready){
+                if(gemmaSettingsLoaded)engine.ConfigureGemma(gemmaAvailable,gemmaCpuOnly,gemmaCriteria);
+                Guard(LoadQuickPreview);
+            }
+            string activeOperation=draftTask??task;
+            var progress=activeOperation==null ? null : engine.GetOperationProgress(activeOperation);
             if(progress!=null)Text("ActivityText",progress.Stage+" · "+progress.Completed.ToString("N0")+(progress.Total.HasValue ? " / "+progress.Total.Value.ToString("N0") : "")+" "+progress.Unit);
+            var bar=Get<ProgressBar>("ActivityProgress");
+            if(status.RunningScan){
+                bar.Visibility=Visibility.Visible;
+                if(status.DiscoveredFiles>0){bar.IsIndeterminate=false;bar.Value=Math.Min(100.0,100.0*status.ProcessedFiles/status.DiscoveredFiles);}
+                else bar.IsIndeterminate=true;
+            }else if(progress!=null){
+                bar.Visibility=Visibility.Visible;
+                if(progress.Total.HasValue && progress.Total.Value>0){bar.IsIndeterminate=false;bar.Value=Math.Min(100.0,100.0*progress.Completed/progress.Total.Value);}
+                else bar.IsIndeterminate=true;
+            }else{
+                bar.Visibility=Visibility.Collapsed;bar.IsIndeterminate=false;bar.Value=0;
+            }
             UpdateControls();
         }
 
         void DispatchResult(UiResult result) {
             Action<UiResult> action;
-            try{if(pending.TryGetValue(result.RequestId,out action)){pending.Remove(result.RequestId);action(result);}}
+            try{
+                if(pending.TryGetValue(result.RequestId,out action)){pending.Remove(result.RequestId);action(result);}
+                else if(result.Kind=="VideoSource")PlaybackProxy.Release(result.Value);
+            }
             catch(Exception e){Message(e.GetBaseException().Message);}
             finally{if(result.Evidence!=null)result.Evidence.Dispose();}
         }
@@ -353,9 +495,11 @@ namespace MediaReviewer {
             int count=Selected().Length;
             Text("SelectionLabel",count+" selected");
             Button("CatalogButton").IsEnabled=!closing && !switchingCatalog && closingDatabase==null && !scanning && task==null && pending.Count==0 && (engine==null || engine.Ready || engine.Faulted);
-            Button("StartButton").IsEnabled=ready && !scanning;
-            Button("ResumeButton").IsEnabled=ready && !scanning && status!=null && !String.IsNullOrEmpty(status.ResumeId);
+            bool drafting=ready && engine.DraftReviewActive;
+            Button("StartButton").IsEnabled=ready && !scanning && !drafting;
+            Button("ResumeButton").IsEnabled=ready && !scanning && !drafting && status!=null && !String.IsNullOrEmpty(status.ResumeId);
             Button("CancelButton").IsEnabled=ready && scanning;
+            Button("AiDraftButton").IsEnabled=ready && revision>=0;
             foreach(string name in new[]{"FilterButton","ResetButton","GoButton","LogButton","MaintenanceButton","PreviewTasksButton","VaultButton"})Button(name).IsEnabled=ready;
             Button("PreviousButton").IsEnabled=ready && page>1;Button("NextButton").IsEnabled=ready && page<pageCount;
             Combo("ViewBox").IsEnabled=ready;
@@ -363,8 +507,12 @@ namespace MediaReviewer {
             foreach(string name in new[]{"VerifyButton","IdentityHistoryButton","StoredOriginalButton","ExportOriginalButton"})Button(name).IsEnabled=ready && count==1;
             Button("SelectPageButton").IsEnabled=ready && display!=ReviewView.Quick && cards.Any(c=>c.CanSelect);
             Button("ClearSelectionButton").IsEnabled=ready && display!=ReviewView.Quick && count>0;
-            Button("CancelWorkButton").Visibility=ready && task!=null ? Visibility.Visible : Visibility.Collapsed;
-            Button("VaultButton").Content=ready && engine.VaultUnlocked ? "Lock originals" : "Unlock originals";
+            bool canUndo=ready && !undoInFlight && undoStack.Count>0 && task==null;
+            Button("UndoReviewButton").IsEnabled=Button("QuickUndoButton").IsEnabled=canUndo;
+            string undoTip=canUndo ? "Undo last review ("+undoStack[undoStack.Count-1].Items.Length+" item"+(undoStack[undoStack.Count-1].Items.Length==1 ? "" : "s")+") (Ctrl+Z)" : "Undo the last review decision in this session (Ctrl+Z)";
+            Button("UndoReviewButton").ToolTip=Button("QuickUndoButton").ToolTip=undoTip;
+            Button("CancelWorkButton").Visibility=ready && (task!=null || draftTask!=null) ? Visibility.Visible : Visibility.Collapsed;
+            Button("VaultButton").Content=ready && engine.VaultUnlocked ? "🔒 Lock originals" : "🔑 Unlock originals";
             UpdateWorkspace();
         }
 

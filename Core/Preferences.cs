@@ -8,7 +8,7 @@ namespace MediaReviewer {
     public sealed class ReviewPreferences {
         public int PageSize=60,WorkerCount=4,ModifiedAgeYears;
         public string Fit="Uniform",Mode="Quick",Reviewer="",Warning="",DefaultSourceRoot="";
-        public bool IncludeApplicationData,IncludeRootFiles,ScanArchives,SniffRenamed,FullHashScans,ReadOnly;
+        public bool IncludeApplicationData,IncludeRootFiles=true,ScanArchives,SniffRenamed=true,FullHashScans,ReadOnly;
         public string[] Families=Formats.Families.Where(f=>f.Key!="raw").Select(f=>f.Key).ToArray();
         public string Signature {get{Validate();return Digest();}}
         internal long Cost {get{return 1024+2L*(Reviewer.Length+Warning.Length+DefaultSourceRoot.Length+String.Join(",",Families).Length);}}

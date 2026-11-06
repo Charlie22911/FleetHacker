@@ -13,6 +13,8 @@ namespace MediaReviewer {
         MediaRow quickGestureRow;
         Point quickGestureStart;
         long quickGestureGeneration;
+        bool quickPanning;
+        double quickPanOriginX,quickPanOriginY;
 
         internal static string QuickReviewKey(Key key) {
             if(key==Key.Up)return "COMPLIANT";
@@ -46,8 +48,17 @@ namespace MediaReviewer {
             quickGestureHost=Get<FrameworkElement>("QuickImageHost");
             quickOffset=new TranslateTransform();
             Get<FrameworkElement>("QuickSlide").RenderTransform=quickOffset;
+            quickGestureHost.PreviewMouseWheel+=(s,e)=>{
+                if(!Ready || display!=ReviewView.Quick || QuickCard()==null || CanPlayQuickVideo(QuickCard().Record))return;
+                e.Handled=true;
+                AdjustQuickZoom(e.Delta>0 ? 1.25 : 0.8);
+            };
             quickGestureHost.MouseLeftButtonDown+=(s,e)=>{
-                if(e.StylusDevice!=null || !BeginQuickGesture(e.GetPosition(quickGestureHost)))return;
+                if(e.StylusDevice!=null)return;
+                if(e.ClickCount==2 && (quickZoom>1.01 || quickRotation!=0)){
+                    CancelQuickGesture();ResetQuickTransform();e.Handled=true;return;
+                }
+                if(!BeginQuickGesture(e.GetPosition(quickGestureHost)))return;
                 if(!quickGestureHost.CaptureMouse())CancelQuickGesture();
                 e.Handled=true;
             };
@@ -83,28 +94,61 @@ namespace MediaReviewer {
             var card=QuickCard();
             if(card==null)return false;
             quickGestureCard=card;quickGestureRow=card.Record;quickGestureStart=start;quickGestureGeneration=view.Current;
+            quickPanning=quickZoom>1.01;
+            quickPanOriginX=quickPanX;quickPanOriginY=quickPanY;
             return true;
         }
 
         void UpdateQuickGesture(Point current) {
             var delta=current-quickGestureStart;
+            if(quickPanning){
+                quickPanX=quickPanOriginX+delta.X;
+                quickPanY=quickPanOriginY+delta.Y;
+                ApplyQuickTransform();
+                return;
+            }
             bool horizontal=Math.Abs(delta.X)>Math.Abs(delta.Y);
             quickOffset.X=horizontal ? Math.Max(-110,Math.Min(110,delta.X)) : 0;
             quickOffset.Y=horizontal ? 0 : Math.Max(-80,Math.Min(80,delta.Y));
             Key direction=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth,quickGestureHost.ActualHeight);
             var badge=Get<Border>("QuickGestureBadge");
+            var label=Get<TextBlock>("QuickGestureLabel");
             badge.Visibility=CanQuickAction(direction) ? Visibility.Visible : Visibility.Collapsed;
             if(badge.Visibility==Visibility.Visible) {
                 switch(direction) {
-                    case Key.Left: Text("QuickGestureLabel","← Release for previous");break;
-                    case Key.Right: Text("QuickGestureLabel","Release for next →");break;
-                    case Key.Up: Text("QuickGestureLabel","↑ Release to mark Compliant");break;
-                    case Key.Down: Text("QuickGestureLabel","↓ Release to mark Non-compliant");break;
+                    case Key.Left:
+                        badge.SetResourceReference(Border.BackgroundProperty,"SurfaceBrush");
+                        badge.SetResourceReference(Border.BorderBrushProperty,"FocusBrush");
+                        label.SetResourceReference(TextBlock.ForegroundProperty,"TextBrush");
+                        label.Text="← Release for previous";
+                        break;
+                    case Key.Right:
+                        badge.SetResourceReference(Border.BackgroundProperty,"SurfaceBrush");
+                        badge.SetResourceReference(Border.BorderBrushProperty,"FocusBrush");
+                        label.SetResourceReference(TextBlock.ForegroundProperty,"TextBrush");
+                        label.Text="Release for next →";
+                        break;
+                    case Key.Up:
+                        badge.SetResourceReference(Border.BackgroundProperty,"GoodBrush");
+                        badge.SetResourceReference(Border.BorderBrushProperty,"GoodTextBrush");
+                        label.SetResourceReference(TextBlock.ForegroundProperty,"GoodTextBrush");
+                        label.Text="✓ Release to mark Compliant (↑)";
+                        break;
+                    case Key.Down:
+                        badge.SetResourceReference(Border.BackgroundProperty,"BadBrush");
+                        badge.SetResourceReference(Border.BorderBrushProperty,"BadTextBrush");
+                        label.SetResourceReference(TextBlock.ForegroundProperty,"BadTextBrush");
+                        label.Text="✕ Release to mark Non-compliant (↓)";
+                        break;
                 }
             }
         }
 
         void FinishQuickGesture(Point current) {
+            if(quickPanning){
+                CancelQuickGesture();
+                return;
+            }
             var delta=current-quickGestureStart;
             Key direction=QuickReviewDrag(delta.X,delta.Y,quickGestureHost.ActualWidth,quickGestureHost.ActualHeight);
             var card=QuickCard();
@@ -112,12 +156,14 @@ namespace MediaReviewer {
                 card!=null && ReferenceEquals(card,quickGestureCard) &&
                 card.Record.ContentId==quickGestureRow.ContentId && card.Record.ReviewRevision==quickGestureRow.ReviewRevision;
             CancelQuickGesture();
-            if(currentItem)Guard(()=>RunQuickAction(direction));
+            if(!currentItem)return;
+            if(direction==Key.None && delta.Length<6 && quickPlayer!=null)quickPlayer.TogglePlay();
+            else Guard(()=>RunQuickAction(direction));
         }
 
         void CancelQuickGesture() {
             if(quickGestureCard==null)return;
-            quickGestureCard=null;quickGestureRow=null;
+            quickGestureCard=null;quickGestureRow=null;quickPanning=false;
             var touch=quickTouch;quickTouch=null;
             if(touch!=null)quickGestureHost.ReleaseTouchCapture(touch);
             if(quickGestureHost.IsMouseCaptured)quickGestureHost.ReleaseMouseCapture();

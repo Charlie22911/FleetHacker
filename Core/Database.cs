@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace MediaReviewer {
     public static partial class Catalog {
         public const int ApplicationId=0x4D435257;
-        public const int SchemaVersion=11;
+        public const int SchemaVersion=13;
         internal static string Now() { return DateTime.UtcNow.ToString("o",CultureInfo.InvariantCulture); }
         public static void Initialize(SqliteConnection db,bool create) {
             Initialize(db,create,CancellationToken.None,null);
@@ -20,7 +20,7 @@ namespace MediaReviewer {
                 if(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"))!=0) throw new InvalidDataException("Create requires an empty new database; an existing database is never overwritten.");
                 db.Script("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;");
                 try {
-                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version=11;");
+                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
                     db.Execute("INSERT INTO app_info(key,value) VALUES('workspace_id',?)",Guid.NewGuid().ToString());
                     db.Execute("INSERT INTO app_info(key,value) VALUES('revision','0')"); db.Execute("COMMIT");
                 } catch { Rollback(db); throw; }
@@ -32,7 +32,7 @@ namespace MediaReviewer {
                 Migrations.Apply(db,SchemaVersion,token,progress);
                 db.Script("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;");
             }
-            db.Script("PRAGMA cache_size=-4096; PRAGMA mmap_size=0; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=33554432;");
+            db.Script("PRAGMA cache_size=-32768; PRAGMA mmap_size=0; PRAGMA wal_autocheckpoint=1000; PRAGMA journal_size_limit=33554432; CREATE INDEX IF NOT EXISTS scans_started ON scans(id,started_at); CREATE INDEX IF NOT EXISTS original_links_group ON original_links(group_id,capture_id); CREATE INDEX IF NOT EXISTS resolved_locations_run_occ ON resolved_locations(run_id,occurrence_id); CREATE INDEX IF NOT EXISTS identity_runs_state ON identity_runs(id,state); CREATE INDEX IF NOT EXISTS review_groups_reviewer ON review_groups(status,retired,reviewer COLLATE NOCASE);");
         }
         static bool HasIncompleteImport(SqliteConnection db) { object value=db.Scalar("SELECT value FROM app_info WHERE key='import_state'"); return value!=null && (string)value!="complete"; }
         internal const string Schema=@"
@@ -133,40 +133,84 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             foreach(object[] row in db.Query("SELECT status,total FROM bucket_totals",new object[0],4)) { int i=Array.IndexOf(names,(string)row[0]); if(i>=0) totals[i]=(long)row[1]; } return totals;
         }
         internal static string Filter(PageRequest r,List<object> p) {
-            if(!new[]{"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"}.Contains(r.Bucket)) throw new ArgumentException("Invalid bucket");
-            p.Add(r.Bucket); string where="g.status=? AND g.retired=0";
+            bool draft=r.Bucket==DraftReview.Bucket;
+            if(!draft && !new[]{"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"}.Contains(r.Bucket)) throw new ArgumentException("Invalid bucket");
+            p.Add(draft ? "TO_REVIEW" : r.Bucket); string where="g.status=? AND g.retired=0";
+            if(draft)where+=" AND "+DraftReview.SuggestionFilter(r.UseGemma,r.AiScoreModel);
             if(!String.IsNullOrEmpty(r.RootId)) { where+=" AND (g.root_id=? OR EXISTS(SELECT 1 FROM group_occurrences filter_root WHERE filter_root.group_id=g.id AND filter_root.root_id=?))"; p.Add(r.RootId);p.Add(r.RootId); }
+            if(r.Filter=="notes") where+=" AND length(trim(g.notes))>0";
+            else if(r.Filter=="candidate") where+=" AND EXISTS(SELECT 1 FROM contents fc WHERE fc.id=g.content_id AND fc.algorithm<>'sha256')";
+            else if(r.Filter=="verified") where+=" AND EXISTS(SELECT 1 FROM contents fc WHERE fc.id=g.content_id AND fc.algorithm='sha256')";
+            else if(r.Filter=="shared") where+=" AND (SELECT COUNT(*) FROM group_occurrences m WHERE m.group_id=g.id AND (m.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0)))>1";
             string occurrence=OccurrenceFilter(r,"o",p);
-            string stored=String.IsNullOrEmpty(r.Search) && String.IsNullOrEmpty(r.Folder) && String.IsNullOrEmpty(r.Type) ? " OR (NOT EXISTS(SELECT 1 FROM group_occurrences x WHERE x.group_id=g.id) AND (EXISTS(SELECT 1 FROM original_links l WHERE l.group_id=g.id) OR EXISTS(SELECT 1 FROM legacy_original_links l WHERE l.group_id=g.id)))" : "";
+            string stored=String.IsNullOrEmpty(r.Search) && String.IsNullOrEmpty(r.Folder) && String.IsNullOrEmpty(r.Type) && String.IsNullOrEmpty(r.Filter) ? " OR (NOT EXISTS(SELECT 1 FROM group_occurrences x WHERE x.group_id=g.id) AND (EXISTS(SELECT 1 FROM original_links l WHERE l.group_id=g.id) OR EXISTS(SELECT 1 FROM legacy_original_links l WHERE l.group_id=g.id)))" : "";
             where+=" AND (EXISTS(SELECT 1 FROM group_occurrences o WHERE "+occurrence+")"+stored+")";
             return where;
         }
         static string OccurrenceFilter(PageRequest r,string alias,List<object> p) {
             string sql=alias+".group_id=g.id AND ("+alias+".superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))";
             if(!String.IsNullOrEmpty(r.RootId)){sql+=" AND "+alias+".root_id=?";p.Add(r.RootId);} if(!String.IsNullOrEmpty(r.Type)) { string[] extensions=Formats.Filter(r.Type.ToLowerInvariant());sql+=" AND "+alias+".extension IN("+String.Join(",",extensions.Select(x=>"?"))+")";p.AddRange(extensions); }
+            if(r.Filter=="renamed"){sql+=" AND "+alias+".extension<>'' AND NOT (lower("+alias+".name) LIKE '%.'||lower("+alias+".extension))";}
             if(!String.IsNullOrEmpty(r.Folder)){sql+=" AND instr("+alias+".path_key,?)=1";p.Add(Paths.Key(r.Folder).TrimEnd('\\')+"\\");}
-            if(!String.IsNullOrEmpty(r.Search)){sql+=" AND (instr("+alias+".path_key,?)>0 OR instr(lower(g.reviewer),lower(?))>0)";p.Add(Paths.Key(r.Search));p.Add(r.Search);}
+            if(!String.IsNullOrEmpty(r.Search)){sql+=" AND (instr("+alias+".path_key,?)>0 OR instr(lower(g.reviewer),lower(?))>0 OR instr(lower(g.notes),lower(?))>0 OR EXISTS(SELECT 1 FROM contents sc WHERE sc.id=g.content_id AND instr(lower(sc.digest),lower(?))>0))";p.Add(Paths.Key(r.Search));p.Add(r.Search);p.Add(r.Search);p.Add(r.Search);}
             return sql;
         }
         internal static PageData Page(SqliteConnection db,PageRequest r) {
-            if(!new[]{20,40,60,100,200}.Contains(r.PageSize) || r.Page<1 || r.ExistingIds.Length>200 || r.Search.Length>512) throw new ArgumentException("Invalid bounded page request");
-            if(r.Bucket=="EVIDENCE")return ProtectedPage(db,r);
+            if(!new[]{20,40,60,100,200}.Contains(r.PageSize) || r.Page<1 ||
+                (r.CachedPreviews!=null && r.CachedPreviews.Count>200) || r.Search.Length>512)
+                throw new ArgumentException("Invalid bounded page request");
+            db.Execute("BEGIN");
+            try {
+                r.UseGemma=r.GemmaAvailable && DraftReview.PrefersGemma(db);
+                string criteria=DraftReview.ReadCriteria(db);
+                r.AiScoreModel=r.UseGemma ? GemmaCriteria.Model(criteria) : DraftReview.Model;
+                var result=r.Bucket=="EVIDENCE" ? ProtectedPage(db,r) : OrdinaryPage(db,r);
+                result.GemmaCriteria=criteria;
+                result.UseGemma=r.UseGemma;
+                result.MarqoThreshold=DraftReview.Threshold(db,false);result.GemmaThreshold=DraftReview.Threshold(db,true);
+                result.GemmaCpuOnly=DraftReview.GemmaCpuOnly(db);
+                result.AiThreshold=r.UseGemma ? result.GemmaThreshold : result.MarqoThreshold;
+                result.AiTotal=DraftReview.Count(db,r.UseGemma,r.AiScoreModel);
+                db.Execute("COMMIT");
+                return result;
+            }catch{Rollback(db);throw;}
+        }
+        static PageData OrdinaryPage(SqliteConnection db,PageRequest r) {
             var p=new List<object>(); string where=Filter(r,p); long count=Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM review_groups g WHERE "+where,p.ToArray()));
             int page=(int)Math.Min(r.Page,Math.Max(1,(count+r.PageSize-1)/r.PageSize));
             string sort=PageOrder(r);
-            var data=new PageData { Total=count,Page=page,PageSize=r.PageSize,Revision=Revision(db),Totals=Totals(db),Refill=r.ExistingIds.Length>0 };
+            var data=new PageData { Total=count,Page=page,PageSize=r.PageSize,Revision=Revision(db),Totals=Totals(db) };
             var queryArgs=new List<object>();string matching=OccurrenceFilter(r,"q",queryArgs);
-            string select=@"SELECT g.id,g.content_id,g.display_sequence,COALESCE(o.root_id,g.root_id),roots.path,COALESCE(o.path,''),COALESCE(o.name,'Stored original '||g.id),COALESCE(o.extension,''),c.size,c.legacy_hash,g.status,g.reviewer,g.notes,COALESCE(o.modified_ticks,0),(SELECT COUNT(*) FROM group_occurrences n WHERE n.group_id=g.id AND (n.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))),COALESCE(p.state,CASE WHEN o.id IS NULL THEN 'unavailable' ELSE 'pending' END),COALESCE(p.error,CASE WHEN o.id IS NULL THEN 'No source location is recorded; use Stored original.' END),CASE WHEN length(p.bytes)<=32768 THEN p.bytes ELSE NULL END,p.width,p.height,COALESCE(o.name,'Stored original '||g.id) AS sort_name,o.file_identity,c.algorithm,COALESCE(o.superseded,0),(EXISTS(SELECT 1 FROM original_links l WHERE l.group_id=g.id) OR EXISTS(SELECT 1 FROM legacy_original_links l WHERE l.group_id=g.id)),g.review_revision,COALESCE(p.revision,0),(SELECT CASE WHEN b.state='interrupted' AND i.state IN('pending','running') THEN 'interrupted' WHEN i.state='pending' THEN 'queued' ELSE i.state END FROM preview_retry_items i JOIN preview_retry_batches b ON b.id=i.batch_id WHERE i.group_id=g.id AND i.content_id=g.content_id ORDER BY i.id DESC LIMIT 1) FROM review_groups g JOIN contents c ON c.id=g.content_id LEFT JOIN group_occurrences o ON o.group_id=g.id AND o.id=(SELECT q.id FROM group_occurrences q WHERE "+matching+@" ORDER BY "+SourceOrder("q")+@" LIMIT 1) JOIN source_roots roots ON roots.id=COALESCE(o.root_id,g.root_id) LEFT JOIN previews p ON p.content_id=g.content_id WHERE ";
-            queryArgs.AddRange(p); queryArgs.Add(r.PageSize+r.ExistingIds.Length); queryArgs.Add((long)(page-1)*r.PageSize);
-            var existing=new HashSet<long>(r.ExistingIds); int needed=Math.Max(0,r.PageSize-existing.Count);
-            using(var statement=db.Prepare(select+where+" ORDER BY "+sort+" LIMIT ? OFFSET ?")) { statement.Bind(queryArgs.ToArray()); long retained=0; while(statement.Step()) {
-                if(existing.Contains(Convert.ToInt64(statement.Value(0))) || data.Rows.Count>=needed) continue;
+            string select=@"SELECT g.id,g.content_id,g.display_sequence,COALESCE(o.root_id,g.root_id),roots.path,COALESCE(o.path,''),COALESCE(o.name,'Stored original '||g.id),COALESCE(o.extension,''),c.size,c.legacy_hash,g.status,g.reviewer,g.notes,COALESCE(o.modified_ticks,0),(SELECT COUNT(*) FROM group_occurrences n WHERE n.group_id=g.id AND (n.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))),COALESCE(p.state,CASE WHEN o.id IS NULL THEN 'unavailable' ELSE 'pending' END),COALESCE(p.error,CASE WHEN o.id IS NULL THEN 'No source location is recorded; use Stored original.' END),NULL,p.width,p.height,COALESCE(o.name,'Stored original '||g.id) AS sort_name,o.file_identity,c.algorithm,COALESCE(o.superseded,0),(EXISTS(SELECT 1 FROM original_links l WHERE l.group_id=g.id) OR EXISTS(SELECT 1 FROM legacy_original_links l WHERE l.group_id=g.id)),g.review_revision,COALESCE(p.revision,0),(SELECT CASE WHEN b.state='interrupted' AND i.state IN('pending','running') THEN 'interrupted' WHEN i.state='pending' THEN 'queued' ELSE i.state END FROM preview_retry_items i JOIN preview_retry_batches b ON b.id=i.batch_id WHERE i.group_id=g.id AND i.content_id=g.content_id ORDER BY i.id DESC LIMIT 1),"+(r.Bucket==DraftReview.Bucket ? DraftReview.ScoreSql(r.AiScoreModel) : "NULL")+@" FROM review_groups g JOIN contents c ON c.id=g.content_id LEFT JOIN group_occurrences o ON o.group_id=g.id AND o.id=(SELECT q.id FROM group_occurrences q WHERE "+matching+@" ORDER BY "+SourceOrder("q")+@" LIMIT 1) JOIN source_roots roots ON roots.id=COALESCE(o.root_id,g.root_id) LEFT JOIN previews p ON p.content_id=g.content_id WHERE ";
+            queryArgs.AddRange(p); queryArgs.Add(r.PageSize); queryArgs.Add((long)(page-1)*r.PageSize);
+            long retained=0;
+            using(var statement=db.Prepare(select+where+" ORDER BY "+sort+" LIMIT ? OFFSET ?")) { statement.Bind(queryArgs.ToArray()); while(statement.Step()) {
                 object[] row=statement.Row();
-                if(existing.Contains((long)row[0]) || data.Rows.Count>=needed) continue;
                 foreach(object value in row) retained+=value is string ? ((string)value).Length*2 : value is byte[] ? ((byte[])value).Length : 16;
                 if(retained>12*1024*1024) throw new InvalidOperationException("This page exceeds the bounded payload limit. Choose a smaller items-per-page setting.");
-                data.Rows.Add(new MediaRow { GroupId=(long)row[0],ContentId=(long)row[1],Sequence=(long)row[2],RootId=(string)row[3],RootPath=(string)row[4],RelativePath=(string)row[5],Name=(string)row[6],Extension=(string)row[7],Size=(long)row[8],Hash=(string)row[9],Status=(string)row[10],Reviewer=(string)row[11],Notes=(string)row[12],ModifiedTicks=(long)row[13],LocationCount=(long)row[14],PreviewState=(string)row[15],PreviewError=(string)row[16],PreviewBytes=(byte[])row[17],PreviewWidth=row[18]==null ? 0 : Convert.ToInt32(row[18]),PreviewHeight=row[19]==null ? 0 : Convert.ToInt32(row[19]),FileIdentity=(string)row[21],Algorithm=(string)row[22],SourceIsHistorical=(long)row[23]!=0,OriginalRetained=(long)row[24]!=0,ReviewRevision=(long)row[25],PreviewRevision=(long)row[26],PreviewRetryState=(string)row[27] });
+                data.Rows.Add(new MediaRow { GroupId=(long)row[0],ContentId=(long)row[1],Sequence=(long)row[2],RootId=(string)row[3],RootPath=(string)row[4],RelativePath=(string)row[5],Name=(string)row[6],Extension=(string)row[7],Size=(long)row[8],Hash=(string)row[9],Status=(string)row[10],Reviewer=(string)row[11],Notes=(string)row[12],ModifiedTicks=(long)row[13],LocationCount=(long)row[14],PreviewState=(string)row[15],PreviewError=(string)row[16],PreviewWidth=row[18]==null ? 0 : Convert.ToInt32(row[18]),PreviewHeight=row[19]==null ? 0 : Convert.ToInt32(row[19]),FileIdentity=(string)row[21],Algorithm=(string)row[22],SourceIsHistorical=(long)row[23]!=0,OriginalRetained=(long)row[24]!=0,ReviewRevision=(long)row[25],PreviewRevision=(long)row[26],PreviewRetryState=(string)row[27],AiScore=row[28]==null ? (double?)null : Convert.ToDouble(row[28]),AiGemma=r.UseGemma });
             } }
+            // Read blobs only for visible rows whose saved preview the caller does not have.
+            var missing=data.Rows.Where(row=>{
+                PreviewVersion cached;
+                return r.CachedPreviews==null || !r.CachedPreviews.TryGetValue(row.GroupId,out cached) || !cached.Matches(row);
+            }).ToLookup(row=>row.ContentId);
+            if(missing.Count!=0){
+                var ids=missing.Select(group=>(object)group.Key).ToArray();
+                string sql="SELECT content_id,bytes FROM previews WHERE length(bytes)<=32768 AND content_id IN ("+
+                    String.Join(",",ids.Select(id=>"?"))+")";
+                using(var statement=db.Prepare(sql)){
+                    statement.Bind(ids);
+                    while(statement.Step()){
+                        var bytes=(byte[])statement.Value(1);
+                        foreach(var row in missing[(long)statement.Value(0)]){
+                            retained+=bytes.Length;
+                            if(retained>12*1024*1024)throw new InvalidOperationException("This page exceeds the bounded payload limit. Choose a smaller items-per-page setting.");
+                            row.PreviewBytes=bytes;
+                        }
+                    }
+                }
+            }
             return data;
         }
         static string PageOrder(PageRequest request) {
@@ -178,28 +222,31 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 case "size":key="c.size";break;
                 case "modified":key="o.modified_ticks";break;
                 case "reviewer":key="g.reviewer COLLATE NOCASE";break;
-                default:return "g.display_sequence";
+                default:return request.Bucket==DraftReview.Bucket ? DraftReview.ScoreSql(request.AiScoreModel)+" DESC,g.display_sequence" : "g.display_sequence";
             }
             bool descending=request.SortDescending??request.Sort=="size";
             return key+(descending ? " DESC" : " ASC")+",g.display_sequence";
         }
-        internal static bool Review(SqliteConnection db,ReviewRequest r) {
+        internal static Dictionary<long,long> Review(SqliteConnection db,ReviewRequest r) {
             if(String.IsNullOrEmpty(r.OperationId) || r.OperationId.Length>100 || r.GroupIds==null || r.GroupIds.Length==0 || r.GroupIds.Length>200 || !new[]{"TO_REVIEW","COMPLIANT","NON_COMPLIANT"}.Contains(r.Status) || r.Notes.Length>16384 || r.Reviewer.Length>128) throw new ArgumentException("Invalid bounded review action; Evidence requires verified capture.");
             long[] ids=r.GroupIds.Distinct().OrderBy(x=>x).ToArray(); string payload=r.Status+"\n"+r.Reviewer.Length+":"+r.Reviewer+"\n"+r.Notes.Length+":"+r.Notes+"\n"+String.Join(",",ids.Select(x=>x.ToString(CultureInfo.InvariantCulture)));
             string digest; using(var sha=SHA256.Create()) digest=BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(payload))).Replace("-","").ToLowerInvariant();
+            var revisions=new Dictionary<long,long>(ids.Length);
             db.Execute("BEGIN IMMEDIATE"); try {
                 object existing=db.Scalar("SELECT payload_hash FROM operations WHERE id=?",r.OperationId);
-                if(existing!=null) { if((string)existing!=digest) throw new InvalidOperationException("Operation identifier has a different payload; it cannot be replayed."); db.Execute("COMMIT"); return true; }
+                if(existing!=null) { if((string)existing!=digest) throw new InvalidOperationException("Operation identifier has a different payload; it cannot be replayed."); db.Execute("COMMIT"); return null; }
                 foreach(long id in ids) {
                     var rows=db.Query("SELECT status,legacy_key,review_revision FROM review_groups WHERE id=? AND retired=0",new object[]{id},1);
                     if(rows.Count==0) throw new InvalidOperationException("A selected review group no longer exists; selection is retained.");
                     long expected;if(r.ExpectedRevisions!=null && (!r.ExpectedRevisions.TryGetValue(id,out expected) || expected!=(long)rows[0][2]))throw new InvalidOperationException("The inspected review changed. Reload its current review before saving; your draft was retained.");
                     if((string)rows[0][0]=="EVIDENCE") throw new InvalidOperationException("Imported Evidence is preserved and locked. Unlocking/reclassifying Evidence is not implemented in this slice.");
+                    bool extended=HasExtendedReviewText(db,id);
                     db.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,r.Notes,Now(),id);
+                    if(!extended)revisions.Add(id,ReviewRevision(db,id));
                     ImportedFields.Delete(db,"review_groups",id,"notes");ImportedFields.Delete(db,"review_groups",id,"reviewer");
                     db.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),id,rows[0][1],rows[0][0],r.Status,Now(),r.Reviewer,r.Notes,r.OperationId);
                 }
-                long revision=Bump(db); db.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,digest,Now(),revision); db.Execute("COMMIT"); return false;
+                long revision=Bump(db); db.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,digest,Now(),revision); db.Execute("COMMIT"); return revisions;
             } catch { Rollback(db); throw; }
         }
         internal static void Log(SqliteConnection db,string level,string stage,string path,string message) {
@@ -243,20 +290,23 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             if(result.Reconnection!=null)cost+=result.Reconnection.Cost;
             if(result.Inspector!=null)cost+=result.Inspector.Cost;if(result.Locations!=null)cost+=result.Locations.Cost;
             if(result.Preferences!=null)cost+=result.Preferences.Cost;
-            if(!closing) { try { results.Add(result,cost,stop.Token);return; } catch(OperationCanceledException) {} }if(result.Evidence!=null)result.Evidence.Dispose();
+            if(result.ReviewRevisions!=null)cost+=64L*result.ReviewRevisions.Count;
+            if(!closing) { try { results.Add(result,cost,stop.Token);return; } catch(OperationCanceledException) {} }
+            if(result.Evidence!=null)result.Evidence.Dispose();
+            if(result.Kind=="VideoSource")PlaybackProxy.Release(result.Value);
         }
         public bool TryTakeResult(out UiResult result) { result=results.Take(CancellationToken.None,0);if(result!=null && result.Evidence!=null && (!VaultUnlocked || result.Evidence.Epoch!=VaultGeneration)){result.Evidence.Dispose();result.Evidence=null;result.Success=false;result.Error="Vault locked; protected result discarded.";}return result!=null; }
         public string RequestPage(PageRequest request) {
             if(!ready || closing || faulted) throw new InvalidOperationException("Database is not ready");
             PageRequest r=request.Copy(); string id=Guid.NewGuid().ToString("N"); Interlocked.Exchange(ref viewGeneration,r.Generation);
             var work=new DbWork { Body=db=>Catalog.Page(db,r),Done=value=>Respond(new UiResult { RequestId=id,Kind="Page",Generation=r.Generation,Success=true,Page=(PageData)value }),Failed=error=>Respond(new UiResult { RequestId=id,Kind="Page",Generation=r.Generation,Error=error.Message }) };
-            if(!reads.TryAdd(work,4096+r.ExistingIds.Length*8)) throw new InvalidOperationException("Reader queue is busy; retry the latest view shortly"); return id;
+            if(!reads.TryAdd(work,4096+(r.CachedPreviews==null ? 0 : r.CachedPreviews.Count*64))) throw new InvalidOperationException("Reader queue is busy; retry the latest view shortly"); return id;
         }
         public string RequestReview(ReviewRequest request) { RequireReportWritable();
             if(request!=null && request.Status=="NON_COMPLIANT")return RequestOriginalRetention(request);
             if(!ready || closing || faulted) throw new InvalidOperationException("Database is not ready");
             ReviewRequest r=request.Copy(); string id=Guid.NewGuid().ToString("N");
-            var work=new DbWork { Body=db=>{RequireReportWritable();return (object)Catalog.Review(db,r);},Done=value=>Respond(new UiResult { RequestId=id,Kind="Review",OperationId=r.OperationId,GroupIds=r.GroupIds,Success=true,Reconciled=(bool)value }),Failed=error=>Respond(new UiResult { RequestId=id,Kind="Review",OperationId=r.OperationId,GroupIds=r.GroupIds,Error=error.Message }) };
+            var work=new DbWork { Body=db=>{RequireReportWritable();return Catalog.Review(db,r);},Done=value=>Respond(new UiResult { RequestId=id,Kind="Review",OperationId=r.OperationId,GroupIds=r.GroupIds,Success=true,Reconciled=value==null,ReviewRevisions=(Dictionary<long,long>)value }),Failed=error=>Respond(new UiResult { RequestId=id,Kind="Review",OperationId=r.OperationId,GroupIds=r.GroupIds,Error=error.Message }) };
             long cost=2048+(r.Reviewer.Length+r.Notes.Length)*2+(r.GroupIds==null ? 0 : r.GroupIds.Length*8);
             if(!controls.TryAdd(work,cost)) throw new InvalidOperationException("Review queue is busy; selection is retained"); return id;
         }
@@ -280,10 +330,18 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 stop.Token.ThrowIfCancellationRequested();
                 db.Execute("UPDATE jobs SET state='pending' WHERE state='processing'");
                 db.Execute("UPDATE preview_retry_batches SET state='interrupted' WHERE state IN('queued','running')");db.Execute("UPDATE source_connections SET state='interrupted' WHERE state='checking'");db.Execute("UPDATE source_reconnect_batches SET state='interrupted' WHERE state='running'");
+                // Only runs present before any worker starts are eligible for automatic cleanup.
+                db.Execute("UPDATE identity_runs SET state='abandoned' WHERE state IN('checking','prepared')");
+                bool recoverIdentity=db.Scalar("SELECT 1 FROM identity_runs WHERE state='abandoned' LIMIT 1")!=null;
                 Update(s=>{s.Stage="Ready";s.Revision=Catalog.Revision(db);s.PublishedGroups=Catalog.Totals(db).Sum();s.ResumeId=(string)db.Scalar("SELECT id FROM scans WHERE state NOT IN('complete','complete_errors') ORDER BY started_at DESC LIMIT 1")??"";});
                 for(int i=0;i<2;i++) { var reader=new Thread(ReaderMain) { IsBackground=true,Name="MediaReviewer reader "+i }; readers.Add(reader); reader.Start(); }
                 StartOperations(db);ready=true; DateTime checkpoint=DateTime.UtcNow;
+                DateTime recoveryAt=checkpoint;
                 while(!stop.IsCancellationRequested || controls.Count+writes.Count>0) {
+                    if(recoverIdentity && !stop.IsCancellationRequested && DateTime.UtcNow>=recoveryAt){
+                        recoverIdentity=Catalog.CleanAbandonedVerificationBatch(db);
+                        recoveryAt=DateTime.UtcNow.AddMilliseconds(125);
+                    }
                     DbWork work=null;
                     // One scan command after every aged control burst prevents starvation.
                     if(writes.Count>0 && DateTime.UtcNow-checkpoint>TimeSpan.FromMilliseconds(500)) { work=writes.Take(CancellationToken.None,0); checkpoint=DateTime.UtcNow; }
@@ -310,13 +368,13 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
         }
         void FailAbandoned(DbWork work) { var error=new IOException("Database owner stopped. Reopen and reconcile operation IDs before retrying unconfirmed writes."); if(work.Completion!=null) work.Completion.TrySetException(error); if(work.Failed!=null) work.Failed(error); }
         void ReaderMain() {
-            try { using(var db=new SqliteConnection(path,true)) { db.Script("PRAGMA query_only=ON; PRAGMA cache_size=-2048; PRAGMA mmap_size=0;"); while(!stop.IsCancellationRequested) { DbWork work=reads.Take(stop.Token,100); if(work==null) continue; try { object value=work.Body(db); if(work.Done!=null) work.Done(value); } catch(Exception error) { if(work.Failed!=null) work.Failed(error); } } } }
+            try { using(var db=new SqliteConnection(path,true)) { db.Script("PRAGMA query_only=ON; PRAGMA cache_size=-16384; PRAGMA mmap_size=0;"); while(!stop.IsCancellationRequested) { DbWork work=reads.Take(stop.Token,100); if(work==null) continue; try { object value=work.Body(db); if(work.Done!=null) work.Done(value); } catch(Exception error) { if(work.Failed!=null) work.Failed(error); } } } }
             catch(OperationCanceledException) {} catch(Exception error) { Update(s=>s.Error="Reader failed: "+error.Message); }
         }
         partial void StopScanner(); partial void JoinScanner();
         public void Dispose() {
             if(closed) return; closing=true;closeStage="Stopping scan workers and preserving resumable checkpoints";results.Close();StopScanner(); JoinScanner();
-            closeStage="Stopping background tasks";StopOperations();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();
+            closeStage="Stopping background tasks";StopPlayback();StopOperations();StopGemma();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();
             closeStage="Finishing queued writes and closing the database writer";if(Thread.CurrentThread!=writer) writer.Join();
             closeStage="Closing database readers";foreach(Thread reader in readers) if(Thread.CurrentThread!=reader) reader.Join();closeStage="Database closed";closed=true;
         }

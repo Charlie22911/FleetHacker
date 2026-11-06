@@ -53,8 +53,11 @@ namespace MediaReviewer {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
                 Native.Initialize(scratch);
                 if(mode=="--preview-worker")return DecoderProgram.Run();
+                if(mode=="--draft-worker" && (args.Length==1 || args.Length==2 && (args[1]=="gemma" || args[1]=="gemma-vulkan")))return DraftModelWorker.Run(args.Length==2,args.Length==2 && args[1]=="gemma-vulkan");
+                if(mode=="--playback-worker")return PlaybackProxy.Worker();
+                MediaScratch.QueueRecovery();
                 if(headless)return CommandLine.Run(args);
-                if(mode=="--self-test" && args.Length==2)return Smoke.Run(args[1]);
+                if(mode=="--self-test" && (args.Length==2 || args.Length==3))return Smoke.Run(args[1],args.Length==3 ? args[2] : null);
                 if(mode=="--verify-previews" && args.Length>=2)return Smoke.PreviewFiles(args.Skip(1));
                 if(mode=="--verify-import" && args.Length==3)return Smoke.Import(args[1],args[2]);
                 if(mode!=null && mode!="--window-smoke" && ((mode!="--database" && mode!="--open-evidence-package") || args.Length!=2))throw new ArgumentException("Use --database with a local SQLite path, --open-evidence-package with a package path, or launch without arguments.");
@@ -101,7 +104,7 @@ namespace MediaReviewer {
                                     Smoke.CheckWideShell(controller.Window);
                                     Smoke.SaveGallery(controller.Window,Path.Combine(output,"workspace-dark.png"));
                                 }
-                                Smoke.CheckQuickNavigationAndMarkCompliant(controller.Window);
+                                Smoke.CheckQuickNavigationAndMarkCompliant(controller.Window,controller.ApplyPage);
                                 reviewsStarted++;elapsed.Restart();timer.Start();return;
                             }}
                             catch(Exception error){rendered=false;Console.Error.WriteLine(error);}
@@ -114,13 +117,13 @@ namespace MediaReviewer {
                     return app.Run(controller.Window);
                 }
             }catch(Exception error) {
-                if(headless || mode=="--self-test" || mode=="--window-smoke" || mode=="--preview-worker" || mode=="--verify-previews" || mode=="--verify-import")Console.Error.WriteLine(error);
+                if(headless || mode=="--self-test" || mode=="--window-smoke" || mode=="--preview-worker" || mode=="--draft-worker" || mode=="--playback-worker" || mode=="--verify-previews" || mode=="--verify-import")Console.Error.WriteLine(error);
                 else MessageBox.Show(error.GetBaseException().Message,"Media Compliance Reviewer could not start",MessageBoxButton.OK,MessageBoxImage.Error);
                 return 1;
             }finally {
-                if(mode!="--preview-worker") {
+                if(mode!="--preview-worker" && mode!="--draft-worker") {
                     Preview.Shutdown();
-                    try {if(Directory.Exists(scratch))Directory.Delete(scratch,false);}catch(IOException){}catch(UnauthorizedAccessException){}
+                    MediaScratch.Shutdown();
                 }
             }
         }

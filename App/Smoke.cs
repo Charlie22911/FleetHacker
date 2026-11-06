@@ -61,7 +61,7 @@ namespace MediaReviewer {
             var queues=(ComboBox)window.FindName("ViewBox");queues.ApplyTemplate();queues.IsDropDownOpen=true;
             window.Dispatcher.Invoke(new Action(()=>{}),System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             var popup=queues.Template.FindName("PART_Popup",queues) as Popup;
-            Check(popup!=null && popup.IsOpen && queues.Items.Count==4,"The themed compact dropdown must show the review queues.");
+            Check(popup!=null && popup.IsOpen && queues.Items.Count==5,"The themed compact dropdown must show the review queues.");
             queues.IsDropDownOpen=false;
             top.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(!scan.IsVisible && top.IsVisible && (string)top.Content=="Down" && sidebarButton.IsVisible && previewButton.IsVisible,
@@ -99,12 +99,20 @@ namespace MediaReviewer {
             var inspection=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title.StartsWith("Inspect · "));
             Check(inspection!=null && inspection.IsVisible && list.IsVisible,"Double-click must open Inspect without changing the gallery view.");
             string firstTitle=inspection.Title;
+            var originalStyle=inspection.WindowStyle;
+            var originalState=inspection.WindowState;
+            Check(InspectionArrow(inspection,Key.F11) && inspection.WindowStyle==WindowStyle.None && inspection.WindowState==WindowState.Maximized,
+                "Inspect must enter fullscreen with F11.");
+            var originalInspection=inspection;
             Check(InspectionArrow(inspection,Key.Right),"Inspect must handle the Right arrow.");
             inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
             Check(inspection.Title!=firstTitle && list.IsVisible,"Inspect must show the next item without changing the gallery view.");
+            Check(ReferenceEquals(inspection,originalInspection) && inspection.WindowStyle==WindowStyle.None,"Fullscreen must stay open on the next item.");
             Check(InspectionArrow(inspection,Key.Left),"Inspect must handle the Left arrow.");
             inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
             Check(inspection.Title==firstTitle,"Inspect must return to the previous item.");
+            Check(InspectionArrow(inspection,Key.Escape) && inspection.WindowStyle==originalStyle && inspection.WindowState==originalState,
+                "Escape must restore the Inspect window.");
             inspection.Close();
             var toggle=window.FindName("ThumbnailsModeButton") as Button;
             Check(toggle!=null,"The thumbnails view selector is missing.");
@@ -128,6 +136,12 @@ namespace MediaReviewer {
             if(!SystemParameters.HighContrast)Check(!Object.Equals(before,window.FindResource("PageBrush")),"Theme switch did not change the page brush.");
             var quick=(Button)window.FindName("QuickModeButton");quick.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(((FrameworkElement)window.FindName("QuickPane")).IsVisible && list.Items.Count>0,"Quick Review must show the already-loaded page.");
+            var quickFull=(Button)window.FindName("QuickFullScreenButton");
+            quickFull.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(window.WindowStyle==WindowStyle.None && !sidebar.IsVisible && quickFull.IsVisible,
+                "Quick Review fullscreen must hide workspace chrome and keep its exit button available.");
+            quickFull.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(window.WindowStyle!=WindowStyle.None && sidebar.IsVisible,"Quick Review must restore the previous workspace.");
             CheckQuickKeyMapping();
             Check(ReviewerWindow.QuickReviewDrag(-150,30,500,250)==Key.Left && ReviewerWindow.QuickReviewDrag(150,30,500,250)==Key.Right &&
                 ReviewerWindow.QuickReviewDrag(15,-85,500,250)==Key.Up && ReviewerWindow.QuickReviewDrag(15,85,500,250)==Key.Down &&
@@ -157,32 +171,38 @@ namespace MediaReviewer {
                 Check(notes.Text=="Unsaved notes during rescan","Refreshing locations must preserve an unsaved notes draft.");
             } finally {details.Close();source.Text=previousSource;}
         }
-        static void WaitForWindow(Func<bool> condition) {
+        static void WaitForWindow(Func<bool> condition,string failure="Timed out waiting for Item details to refresh recorded locations.") {
             var frame=new DispatcherFrame();
             var elapsed=Stopwatch.StartNew();
             var timer=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(50)};
             timer.Tick+=(s,e)=>{if(condition() || elapsed.Elapsed>TimeSpan.FromSeconds(12))frame.Continue=false;};
             timer.Start();
             try{Dispatcher.PushFrame(frame);}finally{timer.Stop();}
-            Check(condition(),"Timed out waiting for Item details to refresh recorded locations.");
+            Check(condition(),failure);
         }
         static void CheckCommandSections(Window window) {
             CheckVideoLifecycle();
-            foreach(string name in new[]{"ScanSettingsExpander","FiltersExpander","ReviewNotesExpander","ReviewToolsExpander"}) {
+            foreach(string name in new[]{"FiltersExpander","ReviewNotesExpander","ReviewToolsExpander"}) {
                 var section=window.FindName(name) as Expander;
                 Check(section!=null && !section.IsExpanded,"Secondary commands must start collapsed: "+name);
                 section.IsExpanded=true;window.UpdateLayout();
                 Check(((FrameworkElement)section.Content).IsVisible,"Expanded commands must remain reachable: "+name);
                 section.IsExpanded=false;
             }
+            Check(window.FindName("SettingsCogButton") is Button && ((Button)window.FindName("SettingsCogButton")).IsVisible && (string)((Button)window.FindName("SettingsCogButton")).Content=="⚙","Settings cog button must be a visible icon-only button in the top right.");
             foreach(string name in new[]{"StartButton","ResumeButton","CancelButton","FilterButton","ResetButton","CompliantButton","NonCompliantButton","UnreviewedButton","SelectPageButton"})
                 Check(((Button)window.FindName(name)).IsVisible,"Primary command is hidden: "+name);
             var notes=(TextBox)window.FindName("NotesBox");
             var noteSection=(Expander)window.FindName("ReviewNotesExpander");
             notes.Text="Generated draft";noteSection.IsExpanded=true;noteSection.IsExpanded=false;
             Check(notes.Text=="Generated draft","Collapsing review notes must preserve the draft.");notes.Text="";
-            foreach(string name in new[]{"FormatsButton","OptionsButton","RetryPreviewsButton","ClearSelectionButton","VerifyButton","IdentityHistoryButton","RetainOriginalsButton","CaptureEvidenceButton","VaultButton","StoredOriginalButton","ExportOriginalButton"})
+            ((Button)window.FindName("NoteTagPersonalButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(notes.Text=="Personal media","Quick note tag button did not populate NotesBox.");
+            ((Button)window.FindName("ClearNotesButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(notes.Text=="","Clear notes button did not clear NotesBox.");
+            foreach(string name in new[]{"FormatsButton","OptionsButton","RetryPreviewsButton","ClearSelectionButton","UndoReviewButton","VerifyButton","IdentityHistoryButton","RetainOriginalsButton","CaptureEvidenceButton","VaultButton","StoredOriginalButton","ExportOriginalButton","QuickUndoButton","QuickZoomInButton","QuickRotateRightButton"})
                 Check(window.FindName(name) is Button,"A secondary command was lost: "+name);
+            Check(window.FindName("SmartFilterBox") is ComboBox && window.FindName("ActivityProgress") is ProgressBar,"SmartFilterBox or ActivityProgress is missing.");
             window.UpdateLayout();
             Check(((FrameworkElement)window.FindName("ReviewArea")).ActualHeight>=200,"Compact controls must leave useful review space at 1024x768.");
         }
@@ -205,13 +225,21 @@ namespace MediaReviewer {
             Check(viewport.Children.Count==1 && !play.IsEnabled,"A closed inspector must reject late video results.");
         }
         static bool InspectionArrow(Window window,Key key) {
-            var viewport=(Grid)((DockPanel)window.Content).Children.OfType<Grid>().Single();
-            var arrow=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(viewport),Environment.TickCount,key) {
+            var arrow=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(window),Environment.TickCount,key) {
                 RoutedEvent=Keyboard.PreviewKeyDownEvent
             };
-            viewport.RaiseEvent(arrow);
+            window.RaiseEvent(arrow);
             return arrow.Handled;
         }
+        sealed class FixtureDraftClassifier:IDraftClassifier {
+            public string Device {get{return "";}}
+            readonly double score;
+            internal int Calls;
+            internal FixtureDraftClassifier(double value){score=value;}
+            public double? Score(byte[] preview,CancellationToken token){Calls++;return score;}
+            public void Dispose(){}
+        }
+
         internal static void CheckWideShell(Window window) {
             var sidebar=(FrameworkElement)window.FindName("QueueSidebar");var compact=(FrameworkElement)window.FindName("CompactQueues");
             var button=(Button)window.FindName("QueueSidebarButton");
@@ -231,7 +259,7 @@ namespace MediaReviewer {
             host.RaiseEvent(arrow);
             Check(arrow.Handled,"Quick Review did not handle "+key+".");
         }
-        internal static void CheckQuickNavigationAndMarkCompliant(Window window) {
+        internal static void CheckQuickNavigationAndMarkCompliant(Window window,Action<PageData> applyPage) {
             var pane=(FrameworkElement)window.FindName("QuickPane");
             var first=(CardItem)pane.DataContext;
             QuickArrow(window,Key.Left);
@@ -239,9 +267,26 @@ namespace MediaReviewer {
             QuickArrow(window,Key.Right);
             var next=pane.DataContext as CardItem;
             Check(next!=null && !ReferenceEquals(first,next),"Right must display the next image.");
+            var zoom=(Button)window.FindName("QuickZoomInButton");
+            var zoomReadout=(Button)window.FindName("QuickZoomResetButton");
+            zoom.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            object magnification=zoomReadout.Content;
+            var thumbnail=next.Image;
+            applyPage(new PageData {Page=1,PageSize=60,Total=2,Rows=new List<MediaRow>{next.Record,first.Record}});
             QuickArrow(window,Key.Left);
-            Check(ReferenceEquals(pane.DataContext,first) && first.CanSelect && next.CanSelect &&
-                first.Record.Status=="TO_REVIEW" && next.Record.Status=="TO_REVIEW","Horizontal browsing must preserve both review decisions.");
+            Check(ReferenceEquals(pane.DataContext,next) && Equals(zoomReadout.Content,magnification) && ReferenceEquals(next.Image,thumbnail),
+                "A passive page reorder replaced the active Quick Review item or its preview.");
+            applyPage(new PageData {Page=1,PageSize=60,Total=2,Rows=new List<MediaRow>{first.Record,next.Record}});
+            applyPage(new PageData {Page=1,PageSize=60,Total=1,Rows=new List<MediaRow>{next.Record}});
+            Check(Equals(zoomReadout.Content,magnification),"Removing a preceding card reset the active Quick Review zoom.");
+            applyPage(new PageData {Page=1,PageSize=60,Total=1,Rows=new List<MediaRow>{first.Record}});
+            Check(Equals(zoomReadout.Content,"Fit"),"Quick Review did not reset the preview when the current item left the page.");
+            applyPage(new PageData {Page=1,PageSize=60,Total=2,Rows=new List<MediaRow>{first.Record,next.Record}});
+            QuickArrow(window,Key.Right);
+            QuickArrow(window,Key.Left);
+            var current=pane.DataContext as CardItem;
+            Check(current!=null && current.Record.GroupId==first.Record.GroupId && current.CanSelect && next.CanSelect &&
+                current.Record.Status=="TO_REVIEW" && next.Record.Status=="TO_REVIEW","Horizontal browsing must preserve both review decisions.");
             ((Button)window.FindName("QuickInspectButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var inspection=window.OwnedWindows.OfType<Window>().Single(w=>w.Title.StartsWith("Inspect · "));
             Check(InspectionArrow(inspection,Key.Up),"Inspect must classify with the Up arrow.");
@@ -275,39 +320,155 @@ namespace MediaReviewer {
         }
         static void Check(bool value,string message){if(!value)throw new InvalidOperationException(message);}
         static void Wait(Func<bool> condition){var watch=Stopwatch.StartNew();while(!condition()){if(watch.Elapsed>TimeSpan.FromSeconds(40))throw new TimeoutException("Timed out waiting for the reviewer engine.");Thread.Sleep(25);}}
-        static UiResult Result(ReviewerEngine engine,string request) {
+        static UiResult WaitForResult(ReviewerEngine engine,string request) {
             UiResult result=null;
             Wait(()=>{UiResult reply;return engine.TryTakeResult(out reply) && reply.RequestId==request && (result=reply)!=null;});
+            return result;
+        }
+        static UiResult Result(ReviewerEngine engine,string request) {
+            var result=WaitForResult(engine,request);
             Check(result.Success,result.Error);return result;
         }
-        internal static int Run(string directory) {
+        internal static int Run(string directory,string playbackFixtures=null) {
             Check(Native.SqliteVersion=="3.54.1","Linked SQLite was not loaded.");
             string root=Directory.CreateDirectory(Path.Combine(directory,"home-share")).FullName;
             string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
             string image=Path.Combine(folder,"test.png");
             File.WriteAllBytes(image,Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/3Z8AAAAASUVORK5CYII="));
             var preview=Preview.Create(image);Check(preview.Width==1 && preview.Height==1,"Image preview did not decode.");
+            CheckScratchRecovery(directory,image);
             string db=Path.Combine(directory,"review.sqlite");
-            long id;string rootId;
+            long id;string rootId,firstScan;
             using(var engine=ReviewerEngine.Open(db,true)) {
                 Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
                 string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=2});
+                firstScan=scan;
                 Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==1);
                 var first=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page;
                 Check(first.Total==1 && first.Rows.Count==1,"Scanned item is missing.");
+                Check(first.AiThreshold==7 && first.MarqoThreshold==7 && first.GemmaThreshold==55 && !first.GemmaCpuOnly,
+                    "A catalog without saved AI thresholds must use the measured defaults for each model.");
                 var row=first.Rows.Single();id=row.GroupId;rootId=row.RootId;
                 Check(row.PreviewBytes!=null && row.PreviewWidth==1,"Thumbnail was not committed.");
-                Result(engine,engine.RequestReview(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
+                var scanDefaults=new ScanOptions();var catalogDefaults=new ReviewPreferences();
+                Check(scanDefaults.IncludeRootFiles && scanDefaults.SniffRenamed && catalogDefaults.IncludeRootFiles && catalogDefaults.SniffRenamed,
+                    "New scans and catalogs must include root-level files and detect renamed media by default.");
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="AI_SUGGESTIONS"})).Page.Total==0,
+                    "An unevaluated item must not appear in the AI suggestions queue.");
+                var draft=new FixtureDraftClassifier(.86);
+                File.Move(image,image+".offline");
+                try{
+                    string executable;using(var hostProcess=Process.GetCurrentProcess())executable=hostProcess.MainModule.FileName;
+                    if(File.Exists(DraftModelWorker.ModelPath(executable))){
+                        Result(engine,engine.RequestDraftReview());
+                        Check(engine.WaitWrite(writer=>writer.Scalar("SELECT score FROM ai_draft_scores WHERE content_id=?",row.ContentId)) is double,
+                            "The native model did not save a score with the source unavailable.");
+                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=?",row.ContentId));
+                        Wait(()=>!engine.DraftReviewActive);
+                    }
+                    if(DraftModelWorker.GemmaAvailable()){
+                        engine.ConfigureGemma(true,true,"");
+                        Wait(()=>engine.GemmaStatus.StartsWith("Gemma is ready",StringComparison.Ordinal) ||
+                            engine.GemmaStatus.StartsWith("Gemma could not load",StringComparison.Ordinal));
+                        Check(engine.GemmaStatus=="Gemma is ready · CPU",engine.GemmaStatus);
+                        var result=Result(engine,engine.RequestDraftReview(true,true));
+                        Check(result.Value.Contains("1 new scores saved") && engine.GemmaStatus=="Gemma is ready · CPU",
+                            "The preloaded Gemma worker must score an offline preview and stay ready after the draft.");
+                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=? AND model=?",row.ContentId,DraftReview.Gemma));
+                        Wait(()=>!engine.DraftReviewActive);
+                        engine.ConfigureGemma(false,true,"");
+                        Console.WriteLine("Gemma loaded before the draft and stayed ready after scoring an offline preview.");
+                    }
+                    Result(engine,engine.RequestDraftReview(()=>draft));
+                }
+                finally{File.Move(image+".offline",image);}
+                var suggestions=Result(engine,engine.RequestPage(new PageRequest {Generation=2,Bucket="AI_SUGGESTIONS"})).Page;
+                Check(draft.Calls==1 && suggestions.Total==1 && suggestions.AiTotal==1 && suggestions.Rows.Single().GroupId==id && suggestions.Rows.Single().Status=="TO_REVIEW" && suggestions.Rows.Single().AiScore==.86,
+                    "The offline draft should retain the human status and present a suggestion for the scored preview.");
+                Result(engine,engine.RequestDraftThreshold(90));
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=3,Bucket="AI_SUGGESTIONS"})).Page.Total==0,
+                    "Raising the threshold must filter out the saved score.");
+                Result(engine,engine.RequestDraftThreshold(75));
+                Wait(()=>!engine.DraftReviewActive);
+                Result(engine,engine.RequestDraftReview(()=>draft));
+                Check(draft.Calls==1 && Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS"})).Page.Total==1,
+                    "Lowering the threshold must reuse the saved score.");
+                Wait(()=>!engine.DraftReviewActive);
+                Result(engine,engine.RequestDraftThreshold(80,true,true));
+                Result(engine,engine.RequestDraftReview(()=>new FixtureDraftClassifier(.55),true));
+                var gemmaPage=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS",GemmaAvailable=true})).Page;
+                var fallbackPage=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS"})).Page;
+                Check(gemmaPage.UseGemma && gemmaPage.Total==0 && gemmaPage.GemmaCpuOnly && !fallbackPage.UseGemma && fallbackPage.Total==1 && fallbackPage.AiThreshold==75,
+                    "The model selection, cached scores, and thresholds must remain independent with a Marqo fallback.");
+                Result(engine,engine.RequestDraftThreshold(55,true,true));
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS",GemmaAvailable=true})).Page.Rows.Single().AiScore==.55,
+                    "The Gemma threshold must include a matching saved policy tier.");
+                string custom=GemmaCriteria.Default.Replace("maps, diagrams","train diagrams");
+                Result(engine,engine.RequestDraftThreshold(55,true,true,custom));
+                var customRequest=new PageRequest {Generation=4,Bucket=DraftReview.Bucket,GemmaAvailable=true};
+                var customPage=Result(engine,engine.RequestPage(customRequest)).Page;
+                Check(customPage.Total==0 && customPage.AiTotal==0 && customPage.GemmaCriteria==custom,
+                    "Changing Gemma criteria must persist the text and hide scores for the prior rubric.");
+                Wait(()=>!engine.DraftReviewActive);
+                Result(engine,engine.RequestDraftReview(()=>new FixtureDraftClassifier(.90),true));
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.Rows.Single().AiScore==.90,
+                    "Scores must be shown only for the current Gemma criteria.");
+                Wait(()=>!engine.DraftReviewActive);
+                Result(engine,engine.RequestDraftThreshold(55,true,true,GemmaCriteria.Default));
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.Rows.Single().AiScore==.55,
+                    "Resetting the Gemma criteria must restore the cached default scores.");
+                Result(engine,engine.RequestDraftThreshold(75));
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket=DraftReview.Bucket})).Page.Rows.Single().AiScore==.86,
+                    "Changing the Gemma criteria must leave Marqo scores untouched.");
+                var reviewed=Result(engine,engine.RequestReview(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=5,Bucket="AI_SUGGESTIONS"})).Page.Total==0,
+                    "A human decision must clear an AI suggestion.");
+                var undo=new ReviewUndoItem {
+                    GroupId=id,ExpectedRevision=reviewed.ReviewRevisions[id],Status="TO_REVIEW",Reviewer="",Notes=""
+                };
+                string undoId=Guid.NewGuid().ToString("N");
+                Result(engine,engine.RequestUndoReview(new[]{undo},undoId));
+                Check(Result(engine,engine.RequestUndoReview(new[]{undo},undoId)).Reconciled,"A committed Undo was not recognized on replay.");
+                var restored=Result(engine,engine.RequestInspector(id,0)).Inspector;
+                Check(restored.Status=="TO_REVIEW" && restored.Notes=="","Undo did not restore the prior decision and notes.");
+                engine.WaitWrite(writer=>writer.Execute("UPDATE previews SET revision=revision+1 WHERE content_id=?",row.ContentId));
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=6,Bucket="AI_SUGGESTIONS"})).Page.Total==0,
+                    "A replaced preview must invalidate its AI suggestion until it is scored again.");
+                reviewed=Result(engine,engine.RequestReview(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",Reviewer="fixture",Notes="old notes",GroupIds=new[]{id}}));
+                undo.ExpectedRevision=reviewed.ReviewRevisions[id];
+                Result(engine,engine.RequestNotes(new NotesRequest {
+                    GroupId=id,ContentId=row.ContentId,ExpectedRevision=undo.ExpectedRevision,
+                    OperationId=Guid.NewGuid().ToString("N"),Reviewer="fixture",Notes="smoke test"
+                }));
+                Check(!WaitForResult(engine,engine.RequestUndoReview(new[]{undo},Guid.NewGuid().ToString("N"))).Success,
+                    "Undo should reject an intervening notes edit.");
                 var current=Result(engine,engine.RequestPage(new PageRequest {Generation=2,Bucket="COMPLIANT"})).Page;
                 Check(current.Rows.Single().GroupId==id,"Review did not persist the group identity.");
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=3,Bucket="COMPLIANT",Search="fixture",Sort="reviewer",SortDescending=true})).Page.Rows.Single().GroupId==id,"The paged reviewer search did not find a saved label.");
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="COMPLIANT",Search="smoke test"})).Page.Rows.Single().GroupId==id,"The paged search did not find saved decision notes.");
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=5,Bucket="COMPLIANT",Filter="notes"})).Page.Rows.Single().GroupId==id,"The notes smart filter did not match the annotated item.");
+                Result(engine,engine.RequestDatabaseCleanup());
                 Result(engine,engine.RequestSavePreferences(new ReviewPreferences {DefaultSourceRoot=root},Guid.NewGuid().ToString("N")));
                 Result(engine,engine.RequestIntegrity());
             }
-            using(var database=new SqliteConnection(db,false))database.Execute("UPDATE settings SET value=? WHERE key='ui.v1.age'","201");
+            using(var database=new SqliteConnection(db,false)){
+                database.Execute("UPDATE settings SET value=? WHERE key='ui.v1.age'","201");
+                SeedInterruptedVerification(database,id);
+            }
             using(var engine=ReviewerEngine.Open(db,false)) {
                 Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
-                var saved=Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="COMPLIANT"})).Page.Rows.Single();
+                using(var reader=new SqliteConnection(db,true)){
+                    Wait(()=>reader.Scalar("SELECT id FROM identity_runs WHERE id='interrupted-test'")==null);
+                    Check(reader.Scalar("SELECT id FROM identity_runs WHERE id='published-test'")!=null &&
+                        reader.Scalar("PRAGMA foreign_key_check")==null &&
+                        reader.Scalar("SELECT run_id FROM identity_checks WHERE run_id='interrupted-test'")==null &&
+                        reader.Scalar("SELECT run_id FROM identity_plan WHERE run_id='interrupted-test'")==null &&
+                        reader.Scalar("SELECT run_id FROM resolved_locations WHERE run_id='interrupted-test'")==null,
+                        "Startup recovery did not clean up an interrupted verification safely.");
+                }
+                var reopenedPage=Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="COMPLIANT"})).Page;
+                var saved=reopenedPage.Rows.Single();
+                Check(reopenedPage.AiThreshold==75 && reopenedPage.GemmaCpuOnly,"Reopen lost the catalog's saved AI settings.");
                 Check(saved.GroupId==id && saved.Notes=="smoke test","Reopen lost the saved review.");
                 var preferences=Result(engine,engine.RequestPreferences()).Preferences;
                 Check(preferences.DefaultSourceRoot==root,"Reopen lost the default scan path.");
@@ -321,12 +482,39 @@ namespace MediaReviewer {
                 string connection=engine.RequestRootRemap(rootId,replacement,false);Result(engine,connection);
                 var check=Result(engine,engine.RequestSourceConnectionStatus(connection)).SourceConnection;
                 Check(check.Full==1 && check.Failed==0,"Per-root check did not verify the copied source.");
+                engine.WaitWrite(writer=>writer.Execute("UPDATE scans SET state='cancelled',completed_at=NULL WHERE id=?",firstScan));
+                engine.ResumeScan(firstScan,1);Wait(()=>!engine.Status.RunningScan);
+                Check(String.IsNullOrEmpty(engine.Status.Error) && engine.Status.CompletedUsers==2,
+                    "The unchanged root must resume the saved manifest.");
+                engine.WaitWrite(writer=>{
+                    writer.Execute("UPDATE scans SET state='cancelled',completed_at=NULL WHERE id=?",firstScan);
+                    writer.Execute("INSERT INTO jobs(scan_id,user_ordinal,kind,path,path_key,state) VALUES(?,0,'archive','pending.zip','PENDING.ZIP','pending')",firstScan);
+                    return null;
+                });
                 Result(engine,engine.RequestApplySourceConnection(connection,false));
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=2,Bucket="COMPLIANT"})).Page.Rows.Single().SourcePath==copied,"Applied source did not become the active occurrence path.");
+                engine.ResumeScan(firstScan,1);Wait(()=>!engine.Status.RunningScan);
+                Check(engine.Status.Error.Contains("start a fresh scan"),"Resume accepted a copied source for the old manifest.");
+                using(var reader=new SqliteConnection(db,true))
+                    Check((string)reader.Scalar("SELECT state FROM scans WHERE id=?",firstScan)=="cancelled" &&
+                        (string)reader.Scalar("SELECT state FROM jobs WHERE scan_id=? AND path='pending.zip'",firstScan)=="pending",
+                        "Refusing resume must preserve the saved manifest and queued work.");
                 Result(engine,engine.RequestVaultUnlock(Encoding.UTF8.GetBytes(FixturePassword),true));
                 Result(engine,engine.RequestOriginalRetention(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="EVIDENCE",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
+                Result(engine,engine.RequestVaultLock());
+                var evidenceCard=Result(engine,engine.RequestPage(new PageRequest {Generation=3,Bucket="EVIDENCE"})).Page.Rows.Single();
+                var ordinaryDetails=WaitForResult(engine,engine.RequestInspector(id,0));
+                var ordinaryLocations=WaitForResult(engine,engine.RequestLocations(id,""));
+                var ordinaryWrite=WaitForResult(engine,engine.RequestNotes(new NotesRequest {
+                    GroupId=id,ContentId=evidenceCard.ContentId,ExpectedRevision=evidenceCard.ReviewRevision,
+                    OperationId=Guid.NewGuid().ToString("N"),Reviewer="unexpected",Notes="must not overwrite Evidence"
+                }));
+                Check(!ordinaryDetails.Success && !ordinaryLocations.Success && !ordinaryWrite.Success,
+                    "Ordinary Details, locations and notes must be unavailable for locked Evidence.");
+                Result(engine,engine.RequestVaultUnlock(Encoding.UTF8.GetBytes(FixturePassword),false));
                 using(var original=Result(engine,engine.RequestEvidenceInspect(id)).Evidence)
-                    Check(original.Verified && original.Size==new FileInfo(image).Length,"Encrypted original was not verified.");
+                    Check(original.Verified && original.Size==new FileInfo(image).Length &&
+                        EvidencePackageSession.Describe(original).Contains("smoke test"),"Authenticated Evidence did not preserve the original and its notes.");
                 string package=Path.Combine(directory,"fixture.mcrevidence");
                 Result(engine,engine.RequestEvidencePackageExport(new[]{id},package,Guid.NewGuid().ToString("N")));
                 using(var reader=EvidencePackageReader.Open(package,CancellationToken.None,null)) {
@@ -335,7 +523,8 @@ namespace MediaReviewer {
                 }
                 string report=Path.Combine(directory,"report.csv");
                 Result(engine,engine.RequestReport(new ReportOptions {Destination=report,IncludeEvidence=true}));
-                Check(File.Exists(report) && File.ReadAllText(report).Contains("test.png"),"Evidence was missing from the explicitly requested report.");
+                string reportText=File.ReadAllText(report);
+                Check(reportText.Contains("test.png") && reportText.Contains("smoke test"),"Evidence was missing from the explicitly requested report.");
                 Result(engine,engine.RequestEvidenceReclassify(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="NON_COMPLIANT",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{id}}));
                 var flagged=Result(engine,engine.RequestPage(new PageRequest {Generation=3,Bucket="NON_COMPLIANT"})).Page.Rows.Single();
                 var sheet=Result(engine,engine.RequestCaseSheet(flagged)).Value;
@@ -349,12 +538,225 @@ namespace MediaReviewer {
                 using(var output=File.Create(Path.Combine(quickFolder,"next.png")))encoder.Save(output);
                 string scan=engine.StartScan(new ScanOptions {RootPath=quickRoot,WorkerCount=1});
                 Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==1);
-                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4})).Page.Total==2,"The Quick Review navigation fixture is incomplete.");
+                var batch=Result(engine,engine.RequestPage(new PageRequest {Generation=4})).Page.Rows.OrderBy(r=>r.GroupId).ToArray();
+                Check(batch.Length==2,"The Quick Review navigation fixture is incomplete.");
+                var committed=Result(engine,engine.RequestReview(new ReviewRequest {
+                    OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",Reviewer="batch",Notes="batch decision",
+                    GroupIds=batch.Select(r=>r.GroupId).ToArray()
+                }));
+                var restoreBatch=batch.Select(r=>new ReviewUndoItem {
+                    GroupId=r.GroupId,ExpectedRevision=committed.ReviewRevisions[r.GroupId],
+                    Status=r.Status,Reviewer=r.Reviewer,Notes=r.Notes
+                }).ToArray();
+                var last=batch[1];
+                Result(engine,engine.RequestNotes(new NotesRequest {
+                    GroupId=last.GroupId,ContentId=last.ContentId,ExpectedRevision=restoreBatch[1].ExpectedRevision,
+                    OperationId=Guid.NewGuid().ToString("N"),Reviewer="batch",Notes="newer notes"
+                }));
+                Check(!WaitForResult(engine,engine.RequestUndoReview(restoreBatch,Guid.NewGuid().ToString("N"))).Success,
+                    "A stale item must reject an entire Undo batch.");
+                var afterConflict=Result(engine,engine.RequestPage(new PageRequest {Generation=5,Bucket="COMPLIANT"})).Page.Rows;
+                Check(afterConflict.Count==2 && afterConflict.Single(r=>r.GroupId==batch[0].GroupId).Notes=="batch decision" &&
+                    afterConflict.Single(r=>r.GroupId==last.GroupId).Notes=="newer notes",
+                    "A rejected Undo changed another item or overwrote newer notes.");
+                CheckPageRefresh(engine,batch,quickRoot,quickFolder);
             }
             CheckRenamed(directory,image);
             CheckCrossRootCopies(directory,image);
             CheckMixedFingerprints(directory,image);
+            CheckRecordedCopyFallback(directory,image);
+            if(playbackFixtures!=null){
+                CheckPlaybackFormats(directory,playbackFixtures);
+                if(File.Exists(Path.Combine(playbackFixtures,"wide.webp")))CheckLinkedDimensions(playbackFixtures);
+            }
             Console.WriteLine("Embedded SQLite, scan, duplicate locations, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;
+        }
+        static void SeedInterruptedVerification(SqliteConnection db,long group) {
+            db.Script("PRAGMA foreign_keys=ON");
+            Verification.Transaction(db,()=>{
+                foreach(string state in new[]{"prepared","published"})
+                    db.Execute("INSERT INTO identity_runs(id,group_id,source_content,root_id,state,created_at) SELECT ?,id,content_id,root_id,?,? FROM review_groups WHERE id=?",
+                        state=="prepared" ? "interrupted-test" : "published-test",state,Catalog.Now(),group);
+                db.Execute("INSERT INTO identity_plan SELECT 'interrupted-test',c.digest,g.content_id,g.id,0,0 FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=?",group);
+                db.Execute(@"INSERT INTO identity_checks SELECT 'interrupted-test',o.id,o.occurrence_order,o.path,o.size,o.modified_ticks,
+ o.file_identity,o.modified_ticks,o.file_identity,c.digest FROM group_occurrences o JOIN contents c ON c.id=o.content_id WHERE o.group_id=?",group);
+                db.Execute("INSERT INTO resolved_locations SELECT run_id,?,digest,occurrence_id FROM identity_checks WHERE run_id='interrupted-test'",group);
+            });
+        }
+        static void CheckRecordedCopyFallback(string directory,string image) {
+            string root=Path.Combine(directory,"retention-sources"),db=Path.Combine(directory,"retention-sources.sqlite");
+            string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
+            string first=Path.Combine(folder,"original.png"),second=Path.Combine(folder,"duplicate.png");
+            File.Copy(image,first);File.Copy(image,second);
+            using(var engine=ReviewerEngine.Open(db,true)){
+                Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1,FingerprintPolicy=FingerprintPolicy.Full()});
+                Wait(()=>!engine.Status.RunningScan);Check(String.IsNullOrEmpty(engine.Status.Error),engine.Status.Error);
+                var reviewed=Result(engine,engine.RequestPage(new PageRequest())).Page.Rows.Single();
+                Check(reviewed.LocationCount==2,"The fallback fixture must have two copies on one card.");
+                long group=reviewed.GroupId;
+                Result(engine,engine.RequestReview(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",GroupIds=new[]{group}}));
+                string preferred=reviewed.SourcePath,alternate=preferred==first ? second : first;
+                string parked=Path.Combine(directory,"parked-copy.png");
+                File.Move(preferred,parked);
+                string retry=engine.RequestPreviewRetry(new[]{group});Result(engine,retry);
+                Check(Result(engine,engine.RequestPreviewRetryStatus(retry)).PreviewRetry.Saved==1,"Preview retry did not use the alternate copy.");
+                Result(engine,engine.RequestVaultUnlock(Encoding.UTF8.GetBytes(FixturePassword),true));
+                var capture=new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="EVIDENCE",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{group}};
+                string held=Path.Combine(directory,"held-copy.png");
+                File.Move(alternate,held);
+                Check(!WaitForResult(engine,engine.RequestOriginalRetention(capture)).Success,"An unavailable original must not be published.");
+                using(var reader=new SqliteConnection(db,true))
+                    Check(reader.Scalar("SELECT id FROM original_captures WHERE request_id=?",capture.OperationId)==null &&
+                        (string)reader.Scalar("SELECT status FROM review_groups WHERE id=?",group)=="COMPLIANT",
+                        "Failed capture left staging rows or changed the saved review.");
+                File.Move(held,alternate);
+                capture.OperationId=Guid.NewGuid().ToString("N");
+                Result(engine,engine.RequestOriginalRetention(capture));
+                using(var original=Result(engine,engine.RequestEvidenceInspect(group)).Evidence)
+                    Check(original.Verified && EvidencePackageSession.Describe(original).Contains(Path.GetFileName(alternate)),
+                        "Retention did not authenticate the remaining copy.");
+            }
+        }
+        static void CheckPageRefresh(ReviewerEngine engine,MediaRow[] batch,string quickRoot,string quickFolder) {
+            var ids=batch.Select(r=>r.GroupId).ToArray();
+            Result(engine,engine.RequestReview(new ReviewRequest {
+                OperationId=Guid.NewGuid().ToString("N"),Status="TO_REVIEW",Notes="matches-refresh",GroupIds=ids
+            }));
+            var request=new PageRequest {Generation=6,Search="matches-refresh",Sort="name"};
+            var initial=Result(engine,engine.RequestPage(request)).Page;
+            Check(initial.Total==2 && initial.Rows.All(row=>row.PreviewBytes!=null),"The initial refresh fixture did not have both thumbnails.");
+            request.CachedPreviews=initial.Rows.ToDictionary(r=>r.GroupId,r=>new PreviewVersion(r));
+            var next=initial.Rows.Single(r=>r.GroupId==batch[1].GroupId);
+            File.Copy(Path.Combine(quickFolder,"next.png"),Path.Combine(quickFolder,"copy.png"));
+            string scan=engine.StartScan(new ScanOptions {RootPath=quickRoot,WorkerCount=1});
+            Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==2);
+            Result(engine,engine.RequestReview(new ReviewRequest {
+                OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",GroupIds=new[]{batch[0].GroupId}
+            }));
+            var refill=Result(engine,engine.RequestPage(request)).Page;
+            Check(refill.Total==1 && refill.Totals[0]==1 && refill.Totals[1]==1 &&
+                refill.Revision>initial.Revision && refill.Rows.Single().GroupId==next.GroupId,
+                "Refill did not reconcile the current page and its totals after a review.");
+            var retained=refill.Rows.Single();
+            Check(retained.LocationCount==2 && retained.PreviewBytes==null && retained.PreviewRevision==next.PreviewRevision,
+                "Refill must update the copy count and reuse an unchanged preview.");
+            var card=new CardItem(next);
+            byte[] cached=next.PreviewBytes;
+            card.Update(retained);
+            Check(ReferenceEquals(card.Record.PreviewBytes,cached),"Refill discarded an encoded thumbnail waiting for decode.");
+            Result(engine,engine.RequestNotes(new NotesRequest {
+                GroupId=next.GroupId,ContentId=next.ContentId,ExpectedRevision=retained.ReviewRevision,
+                OperationId=Guid.NewGuid().ToString("N"),Notes="no longer in filter"
+            }));
+            var removed=Result(engine,engine.RequestPage(request)).Page;
+            Check(removed.Total==0 && removed.Rows.Count==0 && removed.Revision>refill.Revision,
+                "Refill returned a retained card that no longer matched the search.");
+            Result(engine,engine.RequestReview(new ReviewRequest {
+                OperationId=Guid.NewGuid().ToString("N"),Status="TO_REVIEW",GroupIds=ids
+            }));
+        }
+        static void CheckScratchRecovery(string directory,string image) {
+            string archive=Path.Combine(directory,"media-preview.zip");
+            using(var output=File.Create(archive))
+            using(var zip=new System.IO.Compression.ZipArchive(output,System.IO.Compression.ZipArchiveMode.Create))
+            using(var entry=zip.CreateEntry("fixture.png").Open())
+            using(var original=File.OpenRead(image))original.CopyTo(entry);
+            var thumbnail=Preview.Create(archive+Archives.Separator+"fixture.png");
+            Check(thumbnail.Width==1 && thumbnail.Height==1,"The ZIP member did not decode through the private scratch directory.");
+            string temp=Path.GetTempPath();
+            Func<string> create=()=>Directory.CreateDirectory(Path.Combine(temp,"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"))).FullName;
+            string interrupted=create(),live=create(),unrelated=create();
+            string name="archive-preview-"+Guid.NewGuid().ToString("N")+".png";
+            foreach(string folder in new[]{interrupted,live,unrelated})File.Copy(image,Path.Combine(folder,name));
+            foreach(string folder in new[]{interrupted,live})
+                File.WriteAllBytes(Path.Combine(folder,"media-owner-v1"),Encoding.ASCII.GetBytes("MCR-MEDIA-1\n"+Path.GetFileName(folder)+"\n"));
+            using(var other=new FileStream(Path.Combine(live,"media-owner-v1"),FileMode.Open,FileAccess.Read,FileShare.ReadWrite)){
+                using(var locked=File.OpenRead(Path.Combine(interrupted,name))){
+                    MediaScratch.Recover(temp);
+                    Check(File.Exists(Path.Combine(interrupted,"media-owner-v1")),"Recovery lost ownership of a locked temporary file.");
+                }
+                MediaScratch.Recover(temp);
+                Check(!Directory.Exists(interrupted) && File.Exists(Path.Combine(live,name)) && File.Exists(Path.Combine(unrelated,name)),
+                    "Recovery must reclaim abandoned files and preserve live or unmarked directories.");
+            }
+            MediaScratch.Recover(temp);
+            Check(!Directory.Exists(live),"Recovery did not reclaim a directory after the helper released its lease.");
+            File.Delete(Path.Combine(unrelated,name));Directory.Delete(unrelated,false);
+            Console.WriteLine("ZIP preview and interrupted scratch recovery passed.");
+        }
+        static void CheckLinkedDimensions(string fixtures) {
+            foreach(string name in new[]{"wide","tall","square"}){
+                string path=Path.Combine(fixtures,name+".webp");
+                var fit=Preview.CreateExpected(path,-1,0,null,800,InspectionPlan.EncodedLimit);
+                Check(Math.Max(fit.Width,fit.Height)==800,"Linked preview did not fit the requested viewport.");
+                var zoom=Preview.CreateExpected(path,-1,0,null,8192,InspectionPlan.EncodedLimit);
+                int width=name=="wide" ? 6000 : name=="tall" ? 1000 : 4000;
+                int height=name=="wide" ? 1000 : name=="tall" ? 6000 : 4000;
+                Check(zoom.SourceWidth==width && zoom.SourceHeight==height && (long)zoom.Width*zoom.Height<=InspectionPlan.MaxPixels,
+                    "Linked preview reported the wrong dimensions or exceeded the decoded pixel budget.");
+                Check(name=="square" ? zoom.Width==2896 && zoom.Height==2896 : zoom.Width==width && zoom.Height==height,
+                    "Linked preview lost aspect-aware detail or exceeded the square limit.");
+            }
+            Console.WriteLine("Wide and tall WebP retained 6,000 pixels, and square WebP stayed within the pixel cap.");
+        }
+        static void CheckPlaybackFormats(string directory,string fixtures) {
+            string root=Path.Combine(directory,"playback-formats");
+            string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
+            var names=new List<string>{"legacy.flv","animated.gif"};
+            if(File.Exists(Path.Combine(fixtures,"audio.webm")))names.Add("audio.webm");
+            foreach(string name in names)File.Copy(Path.Combine(fixtures,name),Path.Combine(folder,name));
+            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"playback-formats.sqlite"),true)){
+                Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1});
+                Wait(()=>!engine.Status.RunningScan);
+                var rows=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page.Rows;
+                Check(rows.Count==names.Count && rows.All(row=>row.PreviewBytes!=null),"All playback fixtures must scan and produce saved posters.");
+                foreach(var row in rows) {
+                    bool gif=row.Extension=="gif";
+                    string proxy;
+                    using(var entered=new ManualResetEventSlim())
+                    using(var release=new ManualResetEventSlim()){
+                        string background=engine.EnqueueOperation("SmokeHold",(db,token,progress)=>{
+                            entered.Set();release.Wait(token);return "Background task released";
+                        });
+                        try{
+                            Wait(()=>entered.IsSet);
+                            proxy=Result(engine,engine.RequestVideoPlayback(row)).Value;
+                        }finally{release.Set();}
+                        Result(engine,background);
+                    }
+                    Check(File.Exists(proxy),"The isolated worker did not create a playback copy.");
+                    var viewport=new Grid();
+                    var player=new VideoPlaybackControls(viewport,done=>{done(proxy,null);return null;}) {TemporarySource=true,Loop=gif};
+                    var dock=new DockPanel();
+                    DockPanel.SetDock(player,Dock.Bottom);dock.Children.Add(player);dock.Children.Add(viewport);
+                    var window=new Window {Title="Playback format smoke check",Width=680,Height=440,Content=dock};
+                    try {
+                        window.Show();
+                        var commands=(WrapPanel)((StackPanel)player.Child).Children[2];
+                        var play=(Button)commands.Children[0];
+                        ((Button)commands.Children[4]).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        player.Prepare();
+                        var media=viewport.Children.OfType<MediaElement>().Single();
+                        WaitForWindow(()=>media.HasVideo && media.NaturalDuration.HasTimeSpan,"The video did not preroll.");
+                        Check(media.Opacity==0 && media.Position==TimeSpan.Zero,"Paused preroll must leave the poster visible.");
+                        play.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        bool ended=false;
+                        media.MediaEnded+=(s,e)=>ended=true;
+                        WaitForWindow(()=>media.Position.TotalMilliseconds>150 && media.Opacity==1,"Windows did not reveal the playing "+row.Extension+" copy.");
+                        Check(media.HasVideo && (gif || media.HasAudio),"The playback copy lost the "+row.Extension+" video or audio stream.");
+                        ((Button)commands.Children.OfType<Button>().Single(b=>Object.Equals(b.Content,"1×"))).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                        Check(Math.Abs(media.SpeedRatio-1.25)<0.001,"Playback speed must apply to the active media.");
+                        if(gif){
+                            WaitForWindow(()=>ended,"Animated GIF did not reach the end of its frame sequence.");
+                            WaitForWindow(()=>media.Position.TotalMilliseconds>150 && media.Position.TotalSeconds<1,"Animated GIF did not loop.");
+                        }
+                    }finally{player.Dispose();window.Close();}
+                    WaitForWindow(()=>!File.Exists(proxy),"The playback copy was not released.");
+                }
+            }
+            Console.WriteLine("Offline playback passed for "+String.Join(", ",names)+".");
         }
         static void CheckCrossRootCopies(string directory,string image) {
             string first=Path.Combine(directory,"duplicate-source");
@@ -406,22 +808,37 @@ namespace MediaReviewer {
                 var locations=Result(engine,engine.RequestLocations(first.GroupId,"")).Locations.Rows;
                 Check(locations.Count==2 && locations.Any(row=>row.FullPath==copy),
                     "A Quick rescan must record a full-verified copy on the existing full fingerprint.");
+                long unrelated=rows.Single(r=>r.GroupId!=first.GroupId).GroupId;
+                Result(engine,engine.RequestReview(new ReviewRequest {
+                    OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",Notes="reviewed full identity",GroupIds=new[]{first.GroupId}
+                }));
+                string reviewedCopy=Path.Combine(folder,"reviewed-copy.png");
+                File.Copy(original,reviewedCopy);
+                engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
+                var unreviewed=Result(engine,engine.RequestPage(new PageRequest {Generation=3})).Page.Rows;
+                Check(unreviewed.Count==1 && unreviewed[0].GroupId==unrelated && unreviewed[0].Algorithm=="sampled-sha256-v1",
+                    "A same-size reviewed identity changed an unrelated file's Quick card.");
+                var reviewed=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="COMPLIANT"})).Page.Rows.Single();
+                Check(reviewed.GroupId==first.GroupId && reviewed.LocationCount==3 &&
+                    Result(engine,engine.RequestLocations(first.GroupId,"")).Locations.Rows.Any(row=>row.FullPath==reviewedCopy),
+                    "An exact copy must reuse the reviewed full card and add its location.");
             }
         }
         static void CheckRenamed(string directory,string image) {
             string root=Directory.CreateDirectory(Path.Combine(directory,"renamed-root")).FullName;
             string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;
-            string renamed=Path.Combine(folder,"renamed.dat");File.Copy(image,renamed);
+            string renamed=Path.Combine(root,"renamed.dat");File.Copy(image,renamed);
             File.WriteAllText(Path.Combine(folder,"document.dat"),"<?xml version=\"1.0\"?><document>ordinary content</document>");
             using(var engine=ReviewerEngine.Open(Path.Combine(directory,"renamed.sqlite"),true)){
                 Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
-                var options=new ScanOptions {RootPath=root,Extensions=new[]{"png"},WorkerCount=1};
+                var options=new ScanOptions {RootPath=root,Extensions=new[]{"png"},WorkerCount=1,SniffRenamed=false};
                 engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
-                Check(Result(engine,engine.RequestPage(new PageRequest{Generation=1})).Page.Total==0,"Renamed media must be opt-in.");
-                options.SniffRenamed=true;options.FingerprintPolicy=FingerprintPolicy.Full();
+                Check(Result(engine,engine.RequestPage(new PageRequest{Generation=1})).Page.Total==0,"Opting out must skip a root file with an unknown extension.");
+                options=new ScanOptions {RootPath=root,Extensions=new[]{"png"},WorkerCount=1,FingerprintPolicy=FingerprintPolicy.Full()};
                 engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
                 var row=Result(engine,engine.RequestPage(new PageRequest{Generation=2,Type="png"})).Page.Rows.Single();
                 Check(row.Name=="renamed.dat" && row.SourcePath==renamed && row.Extension=="png" && row.Algorithm=="sha256" && row.PreviewBytes!=null,"Renamed media did not retain its true filename, media family, preview and full hash.");
+                Check(Result(engine,engine.RequestPage(new PageRequest{Generation=3,Filter="renamed"})).Page.Total==1,"The renamed smart filter did not isolate the mismatched extension item.");
             }
         }
         internal static int PreviewFiles(IEnumerable<string> paths) {

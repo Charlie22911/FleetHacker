@@ -20,10 +20,11 @@ namespace MediaReviewer {
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job,int kind,out Accounting value,uint length,IntPtr returned);
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
         internal DecoderJob():this(384){}
-        internal DecoderJob(int memoryMiB):base(true) {
-            if(memoryMiB<64 || memoryMiB>384)throw new ArgumentOutOfRangeException("memoryMiB");
+        internal DecoderJob(int memoryMiB):this(memoryMiB,2){}
+        internal DecoderJob(int memoryMiB,uint processes):base(true) {
+            if(memoryMiB<64 || memoryMiB>(processes==1 ? 8192 : 384))throw new ArgumentOutOfRangeException("memoryMiB");
             SetHandle(CreateJobObject(IntPtr.Zero,null));if(IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Cannot create the private decoder job");
-            var limits=new Limits { Basic=new Basic {Flags=0x2000|0x200|8,Active=2},JobMemory=new UIntPtr((uint)(memoryMiB*1024*1024)) };
+            var limits=new Limits { Basic=new Basic {Flags=0x2000|0x200|8,Active=processes},JobMemory=new UIntPtr((ulong)memoryMiB*1024*1024) };
             if(!SetInformationJobObject(handle,9,ref limits,(uint)Marshal.SizeOf(limits))){int code=Marshal.GetLastWin32Error();Dispose();throw new System.ComponentModel.Win32Exception(code,"Cannot apply decoder memory/process limits");}
         }
         internal void Assign(Process process){if(!AssignProcessToJobObject(handle,process.Handle))throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Application control or process restrictions prevented private decoder isolation");}

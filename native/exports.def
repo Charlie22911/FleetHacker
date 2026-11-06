@@ -1,5 +1,14 @@
 EXPORTS
     mcr_decode
+    mcr_playback
+    mcr_draft_open
+    mcr_draft_score
+    mcr_draft_close
+    mcr_gemma_cpu_supported
+    mcr_gemma_open
+    mcr_gemma_find_gpu
+    mcr_gemma_score
+    mcr_gemma_close
     sqlite3_libversion
     sqlite3_open_v2
     sqlite3_close_v2

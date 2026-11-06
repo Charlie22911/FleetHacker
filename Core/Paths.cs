@@ -20,6 +20,16 @@ namespace MediaReviewer {
         public static string Source(string path) { string full=Friendly(Path.GetFullPath(path)); string root=Path.GetPathRoot(full); return full.Length<=root.Length ? root : full.TrimEnd('\\'); }
         public static string Key(string path) { return path.Replace('/','\\').ToUpperInvariant(); }
         static string FinalPath(IntPtr handle){var buffer=new StringBuilder(32768);uint length=GetFinalPathNameByHandle(handle,buffer,(uint)buffer.Capacity,0);if(length==0 || length>=buffer.Capacity)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Cannot resolve the opened source location");return Friendly(buffer.ToString());}
+        internal static string ScanRootIdentity(string root) {
+            IntPtr handle=CreateFile(Io(root),0,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero);
+            if(handle==new IntPtr(-1))return null;
+            try{
+                string identity=FileAccessNative.Stamp(handle).Identity;
+                if(identity.EndsWith(":0000000000000000",StringComparison.Ordinal))return null;
+                return identity+"|"+Key(FinalPath(handle).TrimEnd('\\'));
+            }catch(System.ComponentModel.Win32Exception){return null;}
+            finally{CloseHandle(handle);}
+        }
         // Owned file workers or the isolated decoder only: network resolution may block in the OS.
         internal static string OpenedSourceWithinRoot(FileStream source,string root){
             IntPtr directory=CreateFile(Io(root),0,7,IntPtr.Zero,3,0x02000000,IntPtr.Zero);

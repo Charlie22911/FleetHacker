@@ -163,13 +163,21 @@ namespace MediaReviewer {
             Dock(layout,confirm,System.Windows.Controls.Dock.Bottom);
             var results=ResultsList(Column("Full SHA-256","Hash",190),Column("Locations","Locations",70),Column("Decision","Status",100),Column("Reviewer","Reviewer",100),Column("Notes","Notes",165),Column("Conflict","Conflict",60),Column("Example location","ExamplePath",220));
             results.ItemsSource=preview.Outcomes;layout.Children.Add(results);
+            bool applied=false;
+            var owner=engine;
             var apply=ActionButton("Apply verified identities",()=>Guard(()=>{
                 preview.AcceptConflicts=confirm.IsChecked==true;
-                Work(engine.RequestIdentityResolution(preview,Id()),"Apply verified identities");dialog.Close();
+                applied=true;
+                Work(owner.RequestIdentityResolution(preview,Id()),"Apply verified identities");dialog.Close();
             }));
             apply.IsEnabled=preview.CanApply && !preview.HasConflicts;
             confirm.Checked+=(s,e)=>apply.IsEnabled=preview.CanApply;
             confirm.Unchecked+=(s,e)=>apply.IsEnabled=false;
+            dialog.Closed+=(s,e)=>{
+                if(!applied && ReferenceEquals(owner,engine) && Ready && !String.IsNullOrEmpty(preview.RunId)){
+                    try{owner.RequestDiscardIdentityRun(preview.RunId);}catch{}
+                }
+            };
             actions.Children.Add(apply);actions.Children.Add(ActionButton("Close",dialog.Close));
             TrackDatabaseWindow(dialog);dialog.Show();
         }

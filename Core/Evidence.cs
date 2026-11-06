@@ -8,6 +8,9 @@ using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 namespace MediaReviewer {
+    internal sealed class RetentionSourceException:IOException {
+        internal RetentionSourceException(Exception error):base(error.Message,error){}
+    }
     public sealed class EvidenceInspection:IDisposable {
         public long GroupId,Epoch,Size; public string Hash; public bool Verified;
         public byte[] Metadata,Preview;
@@ -15,7 +18,7 @@ namespace MediaReviewer {
         public System.Windows.Media.Imaging.BitmapSource PreviewImage;public string PreviewError;
         public void Dispose(){var metadata=Interlocked.Exchange(ref Metadata,null);var preview=Interlocked.Exchange(ref Preview,null);if(metadata!=null)Array.Clear(metadata,0,metadata.Length);if(preview!=null)Array.Clear(preview,0,preview.Length);PreviewImage=null;}
     }
-    internal sealed class OriginalReceipt {internal string OperationId,Message,Kind="Review";internal long[] GroupIds;internal bool Reconciled,OutputPublished;}
+    internal sealed class OriginalReceipt {internal string OperationId,Message,Kind="Review";internal long[] GroupIds;internal bool Reconciled,OutputPublished;internal Dictionary<long,long> ReviewRevisions;}
     internal static class EvidenceFormat {
         internal const int ChunkSize=4*1024*1024;
         internal static string Quote(string s){var b=new StringBuilder("\"");foreach(char c in s??""){if(c=='\"' || c=='\\')b.Append('\\').Append(c);else if(c<32){switch(c){case '\b':b.Append("\\b");break;case '\f':b.Append("\\f");break;case '\n':b.Append("\\n");break;case '\r':b.Append("\\r");break;case '\t':b.Append("\\t");break;default:b.Append("\\u").Append(((int)c).ToString("x4"));break;}}else b.Append(c);}return b.Append('"').ToString();}
@@ -97,6 +100,22 @@ namespace MediaReviewer {
             while(true){token.ThrowIfCancellationRequested();bool deleted=(bool)WaitWrite(w=>{var rows=w.Query("SELECT c.id FROM original_captures c WHERE c.request_id=? AND c.state<>'complete' LIMIT 1",new object[]{operation},1);if(rows.Count==0)return false;string id=(string)rows[0][0];Verification.Transaction(w,()=>{w.Execute("UPDATE original_captures SET state='abandoned' WHERE id=?",id);object index=w.Scalar("SELECT chunk_index FROM original_chunks WHERE capture_id=? LIMIT 1",id);if(index!=null)w.Execute("DELETE FROM original_chunks WHERE capture_id=? AND chunk_index=?",id,index);else{w.Execute("DELETE FROM original_targets WHERE capture_id=?",id);w.Execute("DELETE FROM original_captures WHERE id=?",id);}});return true;});if(!deleted)break;}
             WaitWrite(w=>{w.Execute("DELETE FROM original_targets WHERE request_id=?",operation);return null;});
         }
+        void DiscardCapture(string capture,CancellationToken token) {
+            while(true){
+                token.ThrowIfCancellationRequested();
+                bool more=(bool)WaitWrite(w=>{
+                    bool removedChunk=false;
+                    Verification.Transaction(w,()=>{
+                        removedChunk=w.Execute(@"DELETE FROM original_chunks WHERE capture_id=? AND chunk_index=(
+ SELECT MIN(chunk_index) FROM original_chunks WHERE capture_id=?)
+ AND EXISTS(SELECT 1 FROM original_captures WHERE id=? AND state='staging')",capture,capture,capture)>0;
+                        if(!removedChunk)w.Execute("DELETE FROM original_captures WHERE id=? AND state='staging'",capture);
+                    });
+                    return removedChunk;
+                });
+                if(!more)return;
+            }
+        }
         public string RequestOriginalCleanup(){return EnqueueOperation("OriginalCleanup",(db,t,p)=>{long done=0;while(true){t.ThrowIfCancellationRequested();string request=(string)db.Scalar("SELECT request_id FROM original_captures WHERE state<>'complete' LIMIT 1");if(request==null)break;AbandonRequest(request,t);p(++done,-1,"unfinished requests discarded");}return "Discarded hidden unfinished captures. Completed originals and reviews were retained.";});}
         public static void ValidateOriginalRetention(ReviewRequest request){EvidenceFormat.Validate(request);}
         public string RequestOriginalRetention(ReviewRequest request){
@@ -139,42 +158,80 @@ namespace MediaReviewer {
                     }
                     string saved=capture;WaitWrite(w=>{w.Execute("INSERT INTO original_targets VALUES(?,?,?,?,?,?,?,?,?,?)",r.OperationId,group,saved,info[0],info[4],info[5],info[6],legacy.Count==0 ? null : legacy[0][0],legacy.Count==0 ? null : legacy[0][1],legacy.Count==0 ? null : legacy[0][2]);return null;});progress(++completed,r.GroupIds.Length,"originals prepared");
                 }
+                Dictionary<long,long> revisions=null;
+                bool reconciled=false;
                 RequireVault(epoch,token);WaitWrite(w=>{Verification.Transaction(w,()=>{
-                    RequireVault(epoch,token);if(Verification.Reconciled(w,r.OperationId,payload))return;
+                    RequireVault(epoch,token);if(Verification.Reconciled(w,r.OperationId,payload)){reconciled=true;return;}
+                    if(!preserveReview && r.Status=="NON_COMPLIANT")revisions=new Dictionary<long,long>(r.GroupIds.Length);
                     var targets=w.Query("SELECT group_id,capture_id,content_id,previous_status,reviewed_at,review_revision,legacy_key,original_hash,original_size FROM original_targets WHERE request_id=?",new object[]{r.OperationId},200);
                     if(targets.Count!=r.GroupIds.Length)throw new InvalidDataException("Original preparation is incomplete");
                     foreach(var row in targets){long group=(long)row[0];if(w.Scalar("SELECT 1 FROM review_groups WHERE id=? AND retired=0 AND content_id=? AND status=? AND reviewed_at IS ? AND review_revision=?",group,row[2],row[3],row[4],row[5])==null)throw new InvalidOperationException("A selected review changed during capture; its newer decision was preserved.");
                         if(row[1]!=null){if(w.Scalar("SELECT 1 FROM original_captures WHERE id=? AND state IN('verified','complete')",row[1])==null)throw new InvalidDataException("A prepared original is not verified");w.Execute("UPDATE original_captures SET state='complete' WHERE id=?",row[1]);w.Execute("INSERT INTO original_links VALUES(?,?) ON CONFLICT(group_id) DO UPDATE SET capture_id=excluded.capture_id",group,row[1]);}
                         else if(w.Scalar("SELECT 1 FROM legacy_original_links WHERE group_id=? AND decision_key=? AND hash=? AND size=?",group,row[6],row[7],row[8])==null)throw new InvalidDataException("The authenticated imported original link changed");
                         if(!preserveReview){
+                            bool canUndo=revisions!=null && !Catalog.HasExtendedReviewText(w,group);
                             w.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,r.Notes,Catalog.Now(),group);ImportedFields.Delete(w,"review_groups",group,"notes");ImportedFields.Delete(w,"review_groups",group,"reviewer");
+                            if(canUndo)revisions.Add(group,Catalog.ReviewRevision(w,group));
                             w.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),group,w.Scalar("SELECT legacy_key FROM review_groups WHERE id=?",group),row[3],r.Status,Catalog.Now(),r.Reviewer,r.Notes,r.OperationId);
                         }
                     }
                     w.Execute("UPDATE original_requests SET state='committed' WHERE id=?",r.OperationId);w.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,payload,Catalog.Now(),Catalog.Bump(w));Catalog.Log(w,"info","Original retention","","Committed "+targets.Count+" verified encrypted originals; operation "+r.OperationId);
-                });return null;});return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Message=preserveReview ? "Committed verified encrypted originals; existing reviews preserved." : "Committed verified encrypted originals."};
+                });return null;});return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Reconciled=reconciled,ReviewRevisions=revisions,Message=preserveReview ? "Committed verified encrypted originals; existing reviews preserved." : "Committed verified encrypted originals."};
             },4096+(r.Notes.Length+r.Reviewer.Length)*2+r.GroupIds.Length*48);
         }
         string CaptureOriginal(SqliteConnection db,ReviewRequest r,long group,object[] info,long epoch,CancellationToken token,Action<long,long,string> progress,string reviewTextNotice=null){
             long size=(long)info[3];int count=OriginalStorageLimits.Read(db).CheckOriginal(size);Capacity(db,checked(size+size/20+count*4096L+1024*1024));
-            var sources=db.Query("SELECT roots.path,o.path,o.size,o.modified_ticks,o.file_identity FROM group_occurrences o JOIN source_roots roots ON roots.id=o.root_id WHERE o.group_id=? AND o.superseded=0 ORDER BY "+Catalog.SourceOrder("o")+" LIMIT 1",new object[]{group},1);
-            if(sources.Count==0)throw new FileNotFoundException("No current source is available for original retention.");var source=sources[0];string sourcePath=Catalog.PreviewSourcePath((string)source[0],(string)source[1]),capture=Guid.NewGuid().ToString("N"),ws=EvidenceFormat.Workspace(db),key=(string)info[1],hash=(string)info[2];
+            Exception last=null;
+            foreach(var source in Catalog.RecordedSources(db,group,(long)info[0],false,token)){
+                RequireVault(epoch,token);
+                string sourcePath;
+                try{sourcePath=Catalog.PreviewSourcePath((string)source[0],(string)source[1]);}
+                catch(InvalidDataException error){last=error;continue;}
+                try{return CaptureFromSource(db,r,group,info,epoch,token,progress,reviewTextNotice,size,count,source,sourcePath);}
+                catch(RetentionSourceException error){last=error.InnerException;}
+            }
+            throw new IOException(last==null ? "No current source is available for original retention." :
+                "No recorded copy could be verified for original retention. "+last.Message,last);
+        }
+        static T ReadRetentionSource<T>(Func<T> read) {
+            try{return read();}
+            catch(Exception error){
+                if(!FileAccessNative.IsSourceFailure(error))throw;
+                throw new RetentionSourceException(error);
+            }
+        }
+        string CaptureFromSource(SqliteConnection db,ReviewRequest r,long group,object[] info,long epoch,CancellationToken token,
+            Action<long,long,string> progress,string reviewTextNotice,long size,int count,object[] source,string sourcePath) {
+            string capture=Guid.NewGuid().ToString("N"),ws=EvidenceFormat.Workspace(db),key=(string)info[1],hash=(string)info[2];
             WaitWrite(w=>{w.Execute("INSERT INTO original_captures(id,request_id,group_id,content_id,decision_key,hash,size,chunk_count,state,created_at) VALUES(?,?,?,?,?,?,?,?,'staging',?)",capture,r.OperationId,group,info[0],key,hash,size,count,Catalog.Now());return null;});
-            // A retry reopens the source. Existing chunks are create-once; this attempt replaces only its staging rows.
+            // A retry reopens the same source and replaces its private staging rows.
+            try{
             VerificationRetry(()=>{
-                using(var lease=SourceRead.Open(sourcePath,size,(long)source[3],(string)source[4],token,(string)source[0]))using(var sha=SHA256.Create()){
+                using(var lease=ReadRetentionSource(()=>SourceRead.Open(sourcePath,size,(long)source[3],(string)source[4],token,(string)source[0])))using(var sha=SHA256.Create()){
                     var stream=lease.Stream;
                     byte[] plain=new byte[EvidenceFormat.ChunkSize];long done=0;
                     try{for(int index=0;index<count;index++){
-                        RequireVault(epoch,token);int length=(int)Math.Min(plain.Length,size-done),read=0;while(read<length){int n=stream.ReadAsync(plain,read,length-read,token).GetAwaiter().GetResult();if(n==0)throw new InvalidDataException("Source ended during retention");read+=n;}
+                        RequireVault(epoch,token);int length=(int)Math.Min(plain.Length,size-done),read=0;
+                        while(read<length){
+                            int n=ReadRetentionSource(()=>stream.ReadAsync(plain,read,length-read,token).GetAwaiter().GetResult());
+                            if(n==0)throw new RetentionSourceException(new InvalidDataException("Source ended during retention."));
+                            read+=n;
+                        }
                         sha.TransformBlock(plain,0,length,plain,0);byte[] part=plain;if(length!=plain.Length){part=new byte[length];Buffer.BlockCopy(plain,0,part,0,length);}byte[] iv=EvidenceFormat.Random(12),cipher;
                         try{cipher=Crypto.Encrypt(vaultKey,iv,EvidenceFormat.Aad(ws,key,hash,"chunk",3,capture,size,count,index),part);}finally{if(part!=plain)Array.Clear(part,0,part.Length);Array.Clear(plain,0,plain.Length);}
                         int at=index;WaitWrite(w=>{RequireVault(epoch,token);Capacity(w,Math.Max(0,size-done-length)+1024*1024);Verification.Transaction(w,()=>{w.Execute("INSERT INTO original_chunks VALUES(?,?,?,?) ON CONFLICT(capture_id,chunk_index) DO UPDATE SET iv=excluded.iv,ciphertext=excluded.ciphertext",capture,at,iv,cipher);});return null;},cipher.Length+4096);done+=length;progress(done,size,"original bytes encrypted");
                     }
-                    lease.Validate();sha.TransformFinalBlock(new byte[0],0,0);if(done!=size || EvidenceFormat.Hex(sha.Hash)!=hash)throw new InvalidDataException("Source bytes no longer match the verified full SHA-256; the original and decision were not published.");
+                    ReadRetentionSource(()=>{lease.Validate();return true;});
+                    sha.TransformFinalBlock(new byte[0],0,0);
+                    if(done!=size || EvidenceFormat.Hex(sha.Hash)!=hash)
+                        throw new RetentionSourceException(new InvalidDataException("Source bytes no longer match the verified full SHA-256."));
                     }finally{Array.Clear(plain,0,plain.Length);}
                 }
             },sourcePath,token);
+            }catch(RetentionSourceException){
+                DiscardCapture(capture,token);
+                throw;
+            }
             string sourceName=Archives.IsPath((string)source[1]) ? Archives.Split((string)source[1])[1] : (string)source[1];
             var metadata=new Dictionary<string,object> {{"format","media-reviewer-original/v3"},{"groupId",group},{"decisionKey",key},{"capturedAt",Catalog.Now()},{"hashes",new {fullSha256=hash}},{"originalSize",size},{"chunkSize",EvidenceFormat.ChunkSize},{"chunkCount",count},{"captureId",capture},{"name",Path.GetFileName(sourceName)},{"path",(string)source[1]},{"rootPath",(string)source[0]},{"reviewer",r.Reviewer},{"notes",r.Notes}};
             if(reviewTextNotice!=null)metadata.Add("displayNotice",reviewTextNotice);

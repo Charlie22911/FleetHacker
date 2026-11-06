@@ -14,6 +14,7 @@ typedef struct {
     int64_t (*seek)(void *, int64_t, int);
     void *state;
 } Input;
+typedef uint8_t *(*AllocatePixels)(int width, int height, int stride, int capacity);
 
 static int read_media(void *opaque, uint8_t *buffer, int count) {
     Input *input = opaque;
@@ -32,10 +33,12 @@ static int deny_external(AVFormatContext *format, AVIOContext **io, const char *
 }
 
 /* Buffers are caller-owned. The return code is a libav error, or zero. */
-__declspec(dllexport) int mcr_decode(const char *name, Input *input, uint8_t *pixels, int side,
+__declspec(dllexport) int mcr_decode(const char *name, Input *input, AllocatePixels allocate, int side,
+        int max_pixels, int *stride_out,
         int *width, int *height, int *source_width, int *source_height, int *rotation) {
     const AVInputFormat *demuxer = av_find_input_format(name);
-    if (!demuxer || side < 1 || side > 4096) return AVERROR(EINVAL);
+    if (!demuxer || !allocate || side < 1 || side > 8192 ||
+            max_pixels < 1 || max_pixels > 8 * 1024 * 1024) return AVERROR(EINVAL);
     AVFormatContext *format = avformat_alloc_context();
     AVCodecContext *decoder = NULL;
     AVPacket *packet = NULL;
@@ -89,28 +92,45 @@ __declspec(dllexport) int mcr_decode(const char *name, Input *input, uint8_t *pi
         rc = AVERROR_INVALIDDATA; goto done;
     }
     int w = frame->width, h = frame->height;
-    *source_width = w;
-    *source_height = h;
     AVRational aspect = av_guess_sample_aspect_ratio(format, format->streams[stream], frame);
     if (aspect.num > 0 && aspect.den > 0) {
         int64_t adjusted = av_rescale(w, aspect.num, aspect.den);
-        if (adjusted > 0 && adjusted <= (int64_t)w * 8 && adjusted * 8 >= w) w = (int)adjusted;
+        if (adjusted > 0 && adjusted <= (int64_t)w * 8 && adjusted * 8 >= w &&
+                adjusted * h <= 200000000) w = (int)adjusted;
     }
+    *source_width = w;
+    *source_height = h;
     int longest = w > h ? w : h;
-    int target = side < longest ? side : longest;
-    *width = FFMAX(1, av_rescale(w, target, longest));
-    *height = FFMAX(1, av_rescale(h, target, longest));
+    int lo = 1, hi = FFMIN(side, longest);
+    while (lo < hi) {
+        int middle = lo + (hi - lo + 1) / 2;
+        int64_t area = FFMAX(1, av_rescale(w, middle, longest)) *
+                       FFMAX(1, av_rescale(h, middle, longest));
+        if (area <= max_pixels) lo = middle;
+        else hi = middle - 1;
+    }
+    *width = (int)FFMAX(1, av_rescale(w, lo, longest));
+    *height = (int)FFMAX(1, av_rescale(h, lo, longest));
     const AVPacketSideData *matrix = av_packet_side_data_get(parameters->coded_side_data,
             parameters->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX);
     if (matrix && matrix->size >= 9 * sizeof(int32_t)) {
         double angle = av_display_rotation_get((const int32_t *)matrix->data);
         if (isfinite(angle)) *rotation = (int)(-angle + (angle > 0 ? -0.5 : 0.5));
     }
+    /* Align rows for swscale without reserving a square the size of the longest edge. */
+    int packed_stride = (*width * 4 + 63) & ~63;
+    int64_t capacity = (int64_t)packed_stride * *height + 64;
+    if (capacity > (int64_t)max_pixels * 4 + (int64_t)side * 63 + 64) {
+        rc = AVERROR(EINVAL); goto done;
+    }
+    uint8_t *pixels = allocate(*width, *height, packed_stride, (int)capacity);
+    if (!pixels) { rc = AVERROR(ENOMEM); goto done; }
+    *stride_out = packed_stride;
     scaler = sws_getContext(frame->width, frame->height, frame->format, *width, *height,
                             AV_PIX_FMT_BGRA, SWS_BILINEAR, NULL, NULL, NULL);
     if (!scaler) { rc = AVERROR(ENOMEM); goto done; }
     uint8_t *data[4] = {pixels, NULL, NULL, NULL};
-    int stride[4] = {side * 4, 0, 0, 0};
+    int stride[4] = {packed_stride, 0, 0, 0};
     rc = sws_scale(scaler, (const uint8_t *const *)frame->data, frame->linesize, 0, frame->height, data, stride);
     rc = rc == *height ? 0 : AVERROR_INVALIDDATA;
 done:

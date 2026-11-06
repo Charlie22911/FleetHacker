@@ -9,7 +9,8 @@ namespace MediaReviewer {
     public sealed class ScanOptions {
         public const int MaxModifiedAgeYears=200;
         public string RootPath; public int WorkerCount=4,ModifiedAgeYears;
-        public bool ExcludeApplicationData=true,IncludeRootFiles,ScanArchives,SniffRenamed;
+        public string ManifestRootIdentity,ManifestSourceHead;
+        public bool ExcludeApplicationData=true,IncludeRootFiles=true,ScanArchives,SniffRenamed=true;
         public string[] Extensions=Formats.Quick; public long CutoffUtcTicks;
         public FingerprintPolicy FingerprintPolicy=new FingerprintPolicy();
         public static ScanOptions FromJson(string json){
@@ -50,17 +51,41 @@ namespace MediaReviewer {
         object Write(Func<SqliteConnection,object> body,long bytes=1024) { return engine.WaitWrite(body,bytes); }
         string Full(string relative) { return String.IsNullOrEmpty(relative) ? options.RootPath : Catalog.PreviewSourcePath(options.RootPath,relative); }
         void Run() {
-            bool completed=false,withErrors=false; string failure=null;
+            bool completed=false,withErrors=false,manifestStarted=false; string failure=null;
             try {
                 if(resume) {
-                    object[] row=(object[])Write(db=> { var rows=db.Query("SELECT scans.config_json,scans.root_id,scans.manifest_complete,scans.state FROM scans WHERE id=?",new object[]{id},1); if(rows.Count==0) throw new InvalidDataException("Saved scan does not exist"); return rows[0]; });
+                    object[] row=(object[])Write(db=> {
+                        var rows=db.Query(@"SELECT s.config_json,s.root_id,s.manifest_complete,s.state,r.path,
+ COALESCE(h.connection_id,''),CASE WHEN c.applied_at>s.started_at THEN 1 ELSE 0 END
+ FROM scans s JOIN source_roots r ON r.id=s.root_id
+ LEFT JOIN root_source_heads h ON h.root_id=s.root_id LEFT JOIN source_connections c ON c.id=h.connection_id
+ WHERE s.id=?",new object[]{id},1);
+                        if(rows.Count==0)throw new InvalidDataException("Saved scan does not exist");
+                        return rows[0];
+                    });
                     if((string)row[3]=="complete" || (string)row[3]=="complete_errors") throw new InvalidOperationException("This scan is already complete. Start a fresh scan for additions.");
-                    options=ScanOptions.FromJson((string)row[0]); options.WorkerCount=resumeWorkers; rootId=(string)row[1]; options.RootPath=(string)Write(db=>db.Scalar("SELECT path FROM source_roots WHERE id=?",rootId)); options.Validate();
+                    options=ScanOptions.FromJson((string)row[0]);options.WorkerCount=resumeWorkers;rootId=(string)row[1];
+                    string currentPath=(string)row[4];
+                    string currentIdentity=Paths.ScanRootIdentity(currentPath);
+                    bool samePath=!String.IsNullOrEmpty(options.RootPath) && Paths.Key(Paths.Source(options.RootPath))==Paths.Key(currentPath);
+                    bool sameBinding=options.ManifestSourceHead==null ? (long)row[6]==0 : options.ManifestSourceHead==(string)row[5];
+                    bool sameRoot=options.ManifestRootIdentity!=null ? options.ManifestRootIdentity==currentIdentity : samePath && sameBinding;
+                    if(!sameRoot)throw new InvalidOperationException("The saved manifest's source folder cannot be verified at its current location. Restore the original source or start a fresh scan. Saved reviews and checkpoints are preserved.");
+                    options.RootPath=currentPath;options.Validate();
                     Write(db=> { db.Execute("UPDATE jobs SET state='pending' WHERE scan_id=? AND state='processing'",id); db.Execute("UPDATE scans SET state='running' WHERE id=?",id); return null; });
+                    manifestStarted=true;
                     if((long)row[2]==0) Manifest();
                 } else {
-                    options.Validate(); string json=new JavaScriptSerializer().Serialize(options);
-                    rootId=(string)Write(db=> { string root=Catalog.Root(db,options.RootPath); db.Execute("INSERT INTO scans(id,root_id,state,started_at,config_json) VALUES(?,?,'manifest',?,?)",id,root,Catalog.Now(),json); return root; });
+                    options.Validate();
+                    options.ManifestRootIdentity=Paths.ScanRootIdentity(options.RootPath);
+                    rootId=(string)Write(db=>{
+                        string root=Catalog.Root(db,options.RootPath);
+                        options.ManifestSourceHead=(string)db.Scalar("SELECT connection_id FROM root_source_heads WHERE root_id=?",root)??"";
+                        string json=new JavaScriptSerializer().Serialize(options);
+                        db.Execute("INSERT INTO scans(id,root_id,state,started_at,config_json) VALUES(?,?,'manifest',?,?)",id,root,Catalog.Now(),json);
+                        return root;
+                    });
+                    manifestStarted=true;
                     Manifest();
                 }
                 int total=Convert.ToInt32(Write(db=>db.Scalar("SELECT COUNT(*) FROM scan_users WHERE scan_id=?",id)));
@@ -95,7 +120,15 @@ namespace MediaReviewer {
                 if(!engine.Faulted) {
                     try {
                         Write(db=> {
-                            db.Execute("BEGIN IMMEDIATE"); try { db.Execute("UPDATE jobs SET state='pending' WHERE scan_id=? AND state='processing'",id); db.Execute("UPDATE scans SET state=?,completed_at=? WHERE id=?",completed ? (withErrors ? "complete_errors" : "complete") : failure==null ? "cancelled" : "failed",completed ? Catalog.Now() : null,id); Catalog.Log(db,failure==null ? "info" : "error","Scan summary",options==null ? "" : options.RootPath,completed ? "Scan completed"+(withErrors ? " with errors" : " cleanly") : failure ?? "Scan cancelled; committed results and pending jobs are retained"); db.Execute("COMMIT"); } catch { Catalog.Rollback(db); throw; } return null;
+                            Verification.Transaction(db,()=>{
+                                if(manifestStarted){
+                                    db.Execute("UPDATE jobs SET state='pending' WHERE scan_id=? AND state='processing'",id);
+                                    db.Execute("UPDATE scans SET state=?,completed_at=? WHERE id=?",completed ? (withErrors ? "complete_errors" : "complete") : failure==null ? "cancelled" : "failed",completed ? Catalog.Now() : null,id);
+                                }
+                                Catalog.Log(db,failure==null ? "info" : "error","Scan summary",options==null ? "" : options.RootPath,
+                                    completed ? "Scan completed"+(withErrors ? " with errors" : " cleanly") : failure ?? "Scan cancelled; committed results and pending jobs are retained");
+                            });
+                            return null;
                         }); Refresh();
                     } catch(Exception error) { if(failure==null) failure=error.Message; }
                 }
@@ -279,11 +312,11 @@ namespace MediaReviewer {
         readonly object scanGate=new object(); ScanRunner scan;
         public string StartScan(ScanOptions options) {
             if(options==null) throw new ArgumentNullException("options"); ScanOptions copy=options.Copy(); copy.Validate();
-            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the owned scan workers to finish before starting another scan."); string id=Guid.NewGuid().ToString(); scan=new ScanRunner(this,copy,id,false,copy.WorkerCount); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Preparing scan";s.CompletedUsers=0;s.TotalUsers=0;s.BytesRead=0;}); scan.Start(); return id; }
+            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before starting a scan."); string id=Guid.NewGuid().ToString(); scan=new ScanRunner(this,copy,id,false,copy.WorkerCount); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Preparing scan";s.CompletedUsers=0;s.TotalUsers=0;s.BytesRead=0;}); scan.Start(); return id; }
         }
         public void ResumeScan(string id,int workers) {
             if(workers<1 || workers>8) throw new ArgumentException("Choose 1–8 workers");
-            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Previous owned workers must finish before resuming."); scan=new ScanRunner(this,null,id,true,workers); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Loading saved manifest";s.BytesRead=0;}); scan.Start(); }
+            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before resuming."); scan=new ScanRunner(this,null,id,true,workers); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Loading saved manifest";s.BytesRead=0;}); scan.Start(); }
         }
         public void CancelScan() { lock(scanGate) if(scan!=null && !scan.Finished) scan.Cancel(); }
         partial void StopScanner() { CancelScan(); }

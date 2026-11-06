@@ -21,6 +21,8 @@ namespace MediaReviewer {
             if(b.Length>=8 && b[0]==137 && At(b,1,"PNG\r\n\x1a\n"))return "png";
             if(Formats.IsRaw(extension))return extension;
             if(At(b,0,"GIF87a") || At(b,0,"GIF89a"))return "gif";
+            if(b.Length>=9 && At(b,0,"FLV") && b[3]==1 && (b[4]&0xfa)==0 &&
+                b[5]==0 && b[6]==0 && b[7]==0 && b[8]>=9)return "flv";
             if(At(b,0,"RIFF") && At(b,8,"WEBP"))return "webp";
             if(At(b,0,"BM"))return "bmp";
             if(b.Length>=4 && b[0]==0 && b[1]==0 && b[2]==1 && b[3]==0)return "ico";

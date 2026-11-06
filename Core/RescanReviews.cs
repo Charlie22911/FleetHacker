@@ -39,8 +39,9 @@ namespace MediaReviewer {
         internal static string SourceOrder(string alias){return alias+".superseded,CASE WHEN "+alias+".file_identity='Unvalidated reconnected source' THEN 1 ELSE 0 END,COALESCE((SELECT started_at FROM scans WHERE id="+alias+".last_scan_id),'') DESC,"+alias+".occurrence_order DESC";}
     }
     internal sealed partial class ScanRunner {
-        string ReviewedSamples(FileRecord record){
-            string sql="SELECT g.id FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE c.algorithm='sampled-sha256-v1' AND c.algorithm_version=1 AND c.size=?1 AND g.retired=0 AND g.status IN('COMPLIANT','NON_COMPLIANT') AND NOT EXISTS(SELECT 1 FROM scan_review_checks checked WHERE checked.scan_id=?2 AND checked.group_id=g.id AND checked.state IN('verified','unverified','conflict'))";
+        string ReviewedSamples(FileRecord record,bool uncheckedOnly=true){
+            string sql="SELECT g.id FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE c.algorithm='sampled-sha256-v1' AND c.algorithm_version=1 AND c.size=?1 AND g.retired=0 AND g.status IN('COMPLIANT','NON_COMPLIANT') AND ?2 IS NOT NULL";
+            if(uncheckedOnly)sql+=" AND NOT EXISTS(SELECT 1 FROM scan_review_checks checked WHERE checked.scan_id=?2 AND checked.group_id=g.id AND checked.state IN('verified','unverified','conflict'))";
             if(record.Algorithm=="sampled-sha256-v1")sql+=" AND c.digest=?3 AND (c.sampling=?4 OR (?4='windows=10;maxWindowBytes=1048576' AND c.sampling='html-v4:q2:'||?3))";
             else sql+=" AND ?3 IS NOT NULL AND ?4 IS NOT NULL";
             return sql+" ORDER BY g.display_sequence LIMIT 9";
@@ -50,11 +51,10 @@ namespace MediaReviewer {
             string digest=record.Hash.StartsWith("q2:",StringComparison.Ordinal) ? record.Hash.Substring(3) : record.Hash;
             object[] args={record.Size,id,digest,record.Sampling};
             bool sampled=record.Algorithm=="sampled-sha256-v1";
+            const string fullAtSize="SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND g.retired=0";
             var check=(Tuple<bool,bool>)Write(db=>{
-                const string fullAtSize="SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND g.retired=0";
-                bool reviews=db.Scalar(fullAtSize+" AND g.status<>'TO_REVIEW' LIMIT 1",record.Size)!=null ||
-                    db.Query(ReviewedSamples(record),args,9).Count>0;
-                bool possibleCopy=!reviews && sampled && db.Scalar(fullAtSize+" LIMIT 1",record.Size)!=null;
+                bool reviews=db.Scalar(ReviewedSamples(record,false),args)!=null;
+                bool possibleCopy=sampled && db.Scalar(fullAtSize+" LIMIT 1",record.Size)!=null;
                 return Tuple.Create(reviews,possibleCopy);
             });
             if(!check.Item1 && !check.Item2)return record;
@@ -66,30 +66,37 @@ namespace MediaReviewer {
                 if(full.Size!=record.Size || full.ModifiedTicks!=record.ModifiedTicks || full.FileIdentity!=record.FileIdentity)throw new FileChangedException("Source changed between quick and full matching; retry must reopen it.");
                 record=full;
             }
-            if(check.Item2){
-                // Same size only justifies a full read. Preserve the normal scan policy if the digest differs.
-                bool exact=Write(db=>db.Scalar(@"SELECT 1 FROM contents c JOIN review_groups g ON g.content_id=c.id
- WHERE c.algorithm='sha256' AND c.algorithm_version=1 AND c.sampling='' AND c.size=? AND c.digest=? AND g.retired=0 LIMIT 1",
-                    record.Size,record.Hash))!=null;
-                if(!exact)return candidate;
-                record.VerifiedCopySampleHash=candidate.Hash;
-                return record;
+            if(check.Item1){
+                bool entered=false;
+                try{
+                    while(!(entered=Monitor.TryEnter(reviewMatchGate,50)))token.ThrowIfCancellationRequested();
+                    token.ThrowIfCancellationRequested();
+                    var groups=(List<object[]>)Write(db=>db.Query(ReviewedSamples(candidate),args,9));
+                    if(groups.Count>8){
+                        Write(db=>{Catalog.Log(db,"warning","Rescan candidate verification",record.RelativePath,"More than eight saved candidate cards need verification. The new full identity is retained separately; use full verification to resolve the remaining candidates.");return null;});
+                        record.ReviewConflict=true;
+                        return record;
+                    }
+                    foreach(var row in groups){
+                        token.ThrowIfCancellationRequested();long group=(long)row[0];
+                        bool start=(bool)Write(db=>{
+                            if(db.Scalar("SELECT 1 FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0 AND g.status IN('COMPLIANT','NON_COMPLIANT') AND c.algorithm='sampled-sha256-v1'",group)==null)return false;
+                            db.Execute("INSERT INTO scan_review_checks(scan_id,group_id,state,error) VALUES(?,?,'checking','') ON CONFLICT(scan_id,group_id) DO UPDATE SET state='checking',error=''",id,group);
+                            return true;
+                        });
+                        if(start)engine.VerifyReviewedRescan(group,record,id,token);
+                    }
+                    record.ReviewConflict=Write(db=>db.Scalar("SELECT 1 FROM scan_review_checks checked JOIN review_groups g ON g.id=checked.group_id JOIN contents c ON c.id=g.content_id WHERE checked.scan_id=? AND checked.state='conflict' AND checked.full_digest=? AND c.size=? LIMIT 1",id,record.Hash,record.Size))!=null;
+                }finally{if(entered)Monitor.Exit(reviewMatchGate);}
             }
-            bool entered=false;
-            try{
-                while(!(entered=Monitor.TryEnter(reviewMatchGate,50)))token.ThrowIfCancellationRequested();token.ThrowIfCancellationRequested();
-                var groups=(List<object[]>)Write(db=>(object)db.Query(ReviewedSamples(candidate),args,9));
-                if(groups.Count>8){Write(db=>{Catalog.Log(db,"warning","Rescan candidate verification",record.RelativePath,"More than eight saved candidate cards need verification. The new full identity is retained separately; use full verification to resolve the remaining candidates.");return null;});return record;}
-                foreach(var row in groups){
-                    token.ThrowIfCancellationRequested();long group=(long)row[0];
-                    bool start=(bool)Write(db=>{
-                        if(db.Scalar("SELECT 1 FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0 AND g.status IN('COMPLIANT','NON_COMPLIANT') AND c.algorithm='sampled-sha256-v1'",group)==null)return (object)false;
-                        db.Execute("INSERT INTO scan_review_checks(scan_id,group_id,state,error) VALUES(?,?,'checking','') ON CONFLICT(scan_id,group_id) DO UPDATE SET state='checking',error=''",id,group);return (object)true;
-                    });
-                    if(start)engine.VerifyReviewedRescan(group,record,id,token);
-                }
-                if(Write(db=>db.Scalar("SELECT 1 FROM scan_review_checks checked JOIN review_groups g ON g.id=checked.group_id JOIN contents c ON c.id=g.content_id WHERE checked.scan_id=? AND checked.state='conflict' AND checked.full_digest=? AND c.size=? LIMIT 1",id,record.Hash,record.Size))!=null)record.ReviewConflict=true;
-            }finally{if(entered)Monitor.Exit(reviewMatchGate);}
+            if(sampled){
+                // A size match is a reason to read, not a reason to publish a different identity.
+                var verified=(Tuple<bool,bool>)Write(db=>Tuple.Create(
+                    db.Scalar(fullAtSize+" AND c.digest=? LIMIT 1",record.Size,record.Hash)!=null,
+                    db.Scalar(ReviewedSamples(candidate,false),args)!=null));
+                if(!verified.Item1 && !verified.Item2 && !record.ReviewConflict)return candidate;
+                if(verified.Item1 && !record.ReviewConflict)record.VerifiedCopySampleHash=candidate.Hash;
+            }
             return record;
         }
     }

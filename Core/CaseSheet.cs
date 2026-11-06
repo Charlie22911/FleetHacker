@@ -41,7 +41,7 @@ WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND o.r
             string path=Paths.OpenedSourceWithinRoot(file,source.Root);
             string extension=Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
             string recordedExtension=Path.GetExtension(source.Relative).TrimStart('.').ToLowerInvariant();
-            if(extension!=recordedExtension || !Formats.Supported(extension) || extension=="svg" || Formats.IsRaw(extension) || videoOnly && !Formats.IsVideo(extension))
+            if(extension!=recordedExtension || !Formats.Supported(extension) || extension=="svg" || Formats.IsRaw(extension) || videoOnly && !Formats.IsPlayable(extension))
                 throw new InvalidOperationException("This action requires a verified media extension. Use in-app inspection for this item.");
             byte[] header;using(var input=new BinaryReader(file,Encoding.UTF8,true))header=input.ReadBytes(512);
             string detected=ImageHeader.Sniff(header);
@@ -59,14 +59,6 @@ WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND o.r
                     using(var process=Process.Start(new ProcessStartInfo(path){UseShellExecute=true})){}
                 }
                 return "Opened the verified media path in its Windows application.";
-            },2048+2L*(selected.RelativePath??"").Length);
-        }
-
-        internal string RequestVideoPlayback(MediaRow row) {
-            var selected=SourceSelection(row);
-            return EnqueueOperation("VideoSource",(db,token,progress)=>{
-                var source=CurrentSource(db,selected);
-                using(var file=OpenRecordedSource(source)){token.ThrowIfCancellationRequested();return VerifyLaunchable(source,file,true);}
             },2048+2L*(selected.RelativePath??"").Length);
         }
 

@@ -5,6 +5,9 @@ using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 namespace MediaReviewer {
+    internal sealed class ProtectedDetailsException:InvalidOperationException {
+        internal ProtectedDetailsException():base("This item is in Evidence. Use View saved original to see its authenticated capture details."){}
+    }
     public sealed class InspectorData {
         public long GroupId,ContentId,Sequence,Size,ReviewRevision,LocationCount;
         public int AlgorithmVersion;
@@ -44,17 +47,19 @@ namespace MediaReviewer {
         internal static InspectorData Inspector(SqliteConnection db,long group) {
             var rows=db.Query(@"SELECT g.content_id,g.display_sequence,c.size,g.review_revision,substr(COALESCE((SELECT current_root.path FROM group_occurrences current_location JOIN source_roots current_root ON current_root.id=current_location.root_id WHERE current_location.group_id=g.id ORDER BY "+SourceOrder("current_location")+@" LIMIT 1),r.path),1,32768),g.status,substr(CAST(g.reviewer AS BLOB),1,385),substr(CAST(g.notes AS BLOB),1,49153),substr(COALESCE(g.reviewed_at,''),1,64),substr(c.algorithm,1,64),c.algorithm_version,substr(c.digest,1,256),substr(c.sampling,1,1024),substr(COALESCE(p.state,'pending'),1,32),substr(COALESCE(p.error,''),1,4096),EXISTS(SELECT 1 FROM imported_fields f WHERE f.owner_table='review_groups' AND f.owner_rowid=g.id AND f.column_name IN('notes','reviewer')),(SELECT COUNT(*) FROM group_occurrences o WHERE o.group_id=g.id) FROM review_groups g JOIN contents c ON c.id=g.content_id JOIN source_roots r ON r.id=g.root_id LEFT JOIN previews p ON p.content_id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1);
             if(rows.Count!=1)throw new InvalidOperationException("This item was replaced or removed; reload the gallery.");var v=rows[0];
+            if((string)v[5]=="EVIDENCE")throw new ProtectedDetailsException();
             var reviewer=new ReviewText((byte[])v[6],128,(long)v[15]!=0);var notes=new ReviewText((byte[])v[7],16384,(long)v[15]!=0);
             return new InspectorData {GroupId=group,ContentId=(long)v[0],Sequence=(long)v[1],Size=(long)v[2],ReviewRevision=(long)v[3],RootPath=(string)v[4],Status=(string)v[5],Reviewer=reviewer.Text,Notes=notes.Text,ReviewedAt=(string)v[8],Algorithm=(string)v[9],AlgorithmVersion=Convert.ToInt32(v[10]),Digest=(string)v[11],Sampling=(string)v[12],PreviewState=(string)v[13],PreviewError=(string)v[14],TextReadOnly=reviewer.ReadOnly || notes.ReadOnly,LocationCount=(long)v[16]};
         }
         internal static LocationPage Locations(SqliteConnection db,long group,string after,int limit) {
             db.Execute("BEGIN");try{
                 var groups=db.Query(@"SELECT g.content_id,
- CASE WHEN g.status<>'EVIDENCE' AND c.algorithm_version=1 AND
+  CASE WHEN c.algorithm_version=1 AND
  ((c.algorithm='sha256' AND c.sampling='') OR c.algorithm='sampled-sha256-v1') THEN g.content_id END,
- c.algorithm='sampled-sha256-v1'
+  c.algorithm='sampled-sha256-v1',g.status
  FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1);
                 if(groups.Count==0)throw new InvalidOperationException("This item was replaced or removed; reload the gallery.");
+                if((string)groups[0][3]=="EVIDENCE")throw new ProtectedDetailsException();
                 var page=new LocationPage {GroupId=group,ContentId=(long)groups[0][0]};long cost=512;
                 // Include the same fingerprint on other ordinary cards without merging their reviews.
                 using(var statement=db.Prepare(@"SELECT substr(CAST(o.id AS BLOB),1,393217),substr(CAST(o.path AS BLOB),1,98302),
@@ -80,6 +85,7 @@ namespace MediaReviewer {
             db.Execute("BEGIN IMMEDIATE");try{
                 object receipt=db.Scalar("SELECT payload_hash FROM operations WHERE id=?",r.OperationId);if(receipt!=null){if((string)receipt!=digest)throw new InvalidOperationException("Operation identifier has a different payload; it cannot be replayed.");db.Execute("COMMIT");return true;}
                 var rows=db.Query("SELECT content_id,review_revision,status,legacy_key,substr(CAST(reviewer AS BLOB),1,385),substr(CAST(notes AS BLOB),1,49153),EXISTS(SELECT 1 FROM imported_fields f WHERE f.owner_table='review_groups' AND f.owner_rowid=g.id AND f.column_name IN('notes','reviewer')) FROM review_groups g WHERE id=? AND retired=0",new object[]{r.GroupId},1);
+                if(rows.Count!=0 && (string)rows[0][2]=="EVIDENCE")throw new ProtectedDetailsException();
                 if(rows.Count!=1 || (long)rows[0][0]!=r.ContentId || (long)rows[0][1]!=r.ExpectedRevision)throw new InvalidOperationException("This item's identity or review changed. Your draft is retained; reload before saving again.");
                 if(new ReviewText((byte[])rows[0][4],128,(long)rows[0][6]!=0).ReadOnly || new ReviewText((byte[])rows[0][5],16384,(long)rows[0][6]!=0).ReadOnly)throw new InvalidOperationException("Extended or unsupported text is preserved read-only by this editor.");
                 string status=(string)rows[0][2],now=Now();db.Execute("UPDATE review_groups SET reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Reviewer,r.Notes,now,r.GroupId);
@@ -91,19 +97,19 @@ namespace MediaReviewer {
     public sealed partial class ReviewerEngine {
         public string RequestInspector(long groupId,long generation) {
             if(!ready || closing || faulted || groupId<1)throw new InvalidOperationException("Database or item is not ready");string id=Guid.NewGuid().ToString("N");
-            var work=new DbWork {Body=db=>Catalog.Inspector(db,groupId),Done=value=>Respond(new UiResult {RequestId=id,Kind="Inspector",Generation=generation,Success=true,Inspector=(InspectorData)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Inspector",Generation=generation,Error=error.Message})};
+            var work=new DbWork {Body=db=>Catalog.Inspector(db,groupId),Done=value=>Respond(new UiResult {RequestId=id,Kind="Inspector",Generation=generation,Success=true,Inspector=(InspectorData)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Inspector",Generation=generation,Error=error.Message,ProtectedDetails=error is ProtectedDetailsException})};
             if(!reads.TryAdd(work,1024))throw new InvalidOperationException("Reader queue is busy; reload Details shortly.");return id;
         }
         public string RequestLocations(long groupId,string afterOccurrenceId,int limit=100) {
             if(!ready || closing || faulted)throw new InvalidOperationException("Database is not ready");if(groupId<1 || afterOccurrenceId==null || afterOccurrenceId.Length>131072 || limit<1 || limit>100)throw new ArgumentException("Choose a bounded location page of1 through100");string id=Guid.NewGuid().ToString("N");
             Catalog.ReviewUtf8.GetByteCount(afterOccurrenceId);
-            var work=new DbWork {Body=db=>Catalog.Locations(db,groupId,afterOccurrenceId,limit),Done=value=>Respond(new UiResult {RequestId=id,Kind="Locations",Success=true,Locations=(LocationPage)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Locations",Error=error.Message})};
+            var work=new DbWork {Body=db=>Catalog.Locations(db,groupId,afterOccurrenceId,limit),Done=value=>Respond(new UiResult {RequestId=id,Kind="Locations",Success=true,Locations=(LocationPage)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Locations",Error=error.Message,ProtectedDetails=error is ProtectedDetailsException})};
             if(!reads.TryAdd(work,1024+afterOccurrenceId.Length*2L))throw new InvalidOperationException("Reader queue is busy; reload Details shortly.");return id;
         }
         public string RequestNotes(NotesRequest request) { RequireReportWritable();
             if(!ready || closing || faulted)throw new InvalidOperationException("Database is not ready");if(request==null || request.GroupId<1 || request.ContentId<1 || request.ExpectedRevision<0 || String.IsNullOrEmpty(request.OperationId) || request.OperationId.Length>100 || request.Notes==null || request.Notes.Length>16384 || request.Reviewer==null || request.Reviewer.Length>128)throw new ArgumentException("Invalid notes action; use up to16384 note characters and128 reviewer characters");
             if(request.Notes.IndexOf('\0')>=0 || request.Reviewer.IndexOf('\0')>=0)throw new ArgumentException("Notes and reviewer labels cannot contain a null character.");Catalog.ReviewUtf8.GetByteCount(request.Notes);Catalog.ReviewUtf8.GetByteCount(request.Reviewer);
-            var r=request.Copy();string id=Guid.NewGuid().ToString("N");var work=new DbWork {Body=db=>{RequireReportWritable();return (object)Catalog.Notes(db,r);},Done=value=>Respond(new UiResult {RequestId=id,Kind="Notes",OperationId=r.OperationId,Success=true,Reconciled=(bool)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Notes",OperationId=r.OperationId,Error=error.Message})};
+            var r=request.Copy();string id=Guid.NewGuid().ToString("N");var work=new DbWork {Body=db=>{RequireReportWritable();return (object)Catalog.Notes(db,r);},Done=value=>Respond(new UiResult {RequestId=id,Kind="Notes",OperationId=r.OperationId,Success=true,Reconciled=(bool)value}),Failed=error=>Respond(new UiResult {RequestId=id,Kind="Notes",OperationId=r.OperationId,Error=error.Message,ProtectedDetails=error is ProtectedDetailsException})};
             if(!controls.TryAdd(work,2048+2L*(r.Notes.Length+r.Reviewer.Length)))throw new InvalidOperationException("Review queue is busy; your draft is retained.");return id;
         }
     }

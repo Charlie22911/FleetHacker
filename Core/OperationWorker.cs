@@ -27,7 +27,7 @@ namespace MediaReviewer {
         void CleanOperation(OperationWork work){var cleanup=work.Cleanup;work.Cleanup=null;if(cleanup!=null)cleanup();}
         void CancelWork(OperationWork work){if(work.Cancel==null)return;work.Cancel.Cancel();work.Progress.State="cancelling";if(!work.Started)CleanOperation(work);}
         public void CancelOperation(string requestId) {lock(operationGate){OperationWork work;if(operationStates.TryGetValue(requestId,out work))CancelWork(work);}}
-        string EnqueueOperation(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes=2048,Action cleanup=null) {return EnqueueOperationWithId(kind,body,retainedBytes,cleanup,null);}
+        internal string EnqueueOperation(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes=2048,Action cleanup=null) {return EnqueueOperationWithId(kind,body,retainedBytes,cleanup,null);}
         string EnqueueOperationWithId(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes,Action cleanup,string requestId) {
             if(!ready || closing || faulted){if(cleanup!=null)cleanup();throw new InvalidOperationException("Database is not ready");}
             var work=new OperationWork {Progress=new OperationProgress {RequestId=requestId??Guid.NewGuid().ToString("N"),Kind=kind,Stage=kind+" queued"},Cancel=CancellationTokenSource.CreateLinkedTokenSource(stop.Token),Body=body,Cleanup=cleanup};
@@ -59,7 +59,7 @@ namespace MediaReviewer {
         }
         void OperationMain() {
             try {using(var db=operationReader(path)) {
-                db.Script("PRAGMA query_only=ON; PRAGMA cache_size=-2048; PRAGMA mmap_size=0;");
+                db.Script("PRAGMA query_only=ON; PRAGMA cache_size=-16384; PRAGMA mmap_size=0;");
                 lock(operationGate){operationReady=true;Monitor.PulseAll(operationGate);}
                 while(true) {
                     OperationWork work=operationQueue.Take(CancellationToken.None,50);if(work==null){if(closing || stop.IsCancellationRequested || operationFailure!=null)break;continue;}
@@ -90,7 +90,7 @@ namespace MediaReviewer {
                     var receipt=value as IdentityResolutionReceipt;
                     var original=value as OriginalReceipt;var secret=value as EvidenceInspection;
                     if(secret!=null && (failure.Length!=0 || !vaultUnlocked || secret.Epoch!=VaultGeneration)){secret.Dispose();secret=null;if(failure.Length==0)failure="Vault locked; protected result discarded.";}
-                    Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=original!=null ? original.Kind : work.Progress.Kind=="Capture" || work.Progress.Kind=="EvidenceReclassify" ? "Review" : work.Progress.Kind,Success=failure.Length==0,Error=failure,Value=original!=null ? original.Message : receipt==null ? value as string : receipt.Message,IdentityPreview=value as IdentityResolutionPreview,Evidence=secret,GroupIds=original==null ? null : original.GroupIds,OperationId=original!=null ? original.OperationId : receipt==null ? null : receipt.OperationId,Reconciled=original!=null ? original.Reconciled : receipt!=null && receipt.Reconciled});
+                    Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=original!=null ? original.Kind : work.Progress.Kind=="Capture" || work.Progress.Kind=="EvidenceReclassify" ? "Review" : work.Progress.Kind,Success=failure.Length==0,Error=failure,Value=original!=null ? original.Message : receipt==null ? value as string : receipt.Message,IdentityPreview=value as IdentityResolutionPreview,Evidence=secret,GroupIds=original==null ? null : original.GroupIds,OperationId=original!=null ? original.OperationId : receipt==null ? null : receipt.OperationId,Reconciled=original!=null ? original.Reconciled : receipt!=null && receipt.Reconciled,ReviewRevisions=original==null ? null : original.ReviewRevisions});
                     if(!vaultUnlocked)ClearVaultWorker();
                     lock(operationGate){CleanOperation(work);work.Cancel.Dispose();work.Cancel=null;}
                 }

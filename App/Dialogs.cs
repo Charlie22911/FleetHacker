@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Threading;
 using Microsoft.Win32;
 
 namespace MediaReviewer {
@@ -44,15 +45,15 @@ namespace MediaReviewer {
         void CloseDatabaseWindows(){foreach(Window dialog in databaseWindows.ToArray())dialog.Close();}
 
         internal void ShowStartupCatalog(Action<Window> beforeShow=null) {
-            var panel=new StackPanel {Margin=new Thickness(20)};
-            var dialog=Dialog("Open or create a catalog",panel,510,240);
+            var panel=new StackPanel {Margin=new Thickness(24,22,24,20)};
+            var dialog=Dialog("Welcome to Media Review",panel,525,250);
             dialog.Icon=Window.Icon;dialog.ShowInTaskbar=false;dialog.ResizeMode=ResizeMode.NoResize;
-            panel.Children.Add(new TextBlock {Text="Media Compliance Reviewer",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,8)});
-            panel.Children.Add(Label("Select an existing catalog to continue, or enter a new filename to create one."));
+            panel.Children.Add(new TextBlock {Text="☀ Welcome to Media Review",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,8)});
+            panel.Children.Add(Label("Pick an existing catalog to jump right back in, or type a new filename on your computer to start a fresh one."));
             var actions=Bar();panel.Children.Add(actions);
-            var open=ActionButton("Open or create catalog…",()=>dialog.DialogResult=true);
+            var open=ActionButton("📂 Open or create catalog…",()=>dialog.DialogResult=true);
             open.Name="StartupCatalogButton";open.IsDefault=true;actions.Children.Add(open);
-            var later=ActionButton("Later",dialog.Close);later.Name="StartupLaterButton";later.IsCancel=true;actions.Children.Add(later);
+            var later=ActionButton("Maybe later",dialog.Close);later.Name="StartupLaterButton";later.IsCancel=true;actions.Children.Add(later);
             if(beforeShow!=null)beforeShow(dialog);
             if(dialog.ShowDialog()==true)Guard(ChooseDatabase);
         }
@@ -69,6 +70,10 @@ namespace MediaReviewer {
             }
             using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.dav1d"))
             using(var reader=new StreamReader(resource))text.Children.Add(new Expander {Header="dav1d 1.5.4 · BSD 2-Clause",Content=Label(reader.ReadToEnd())});
+            using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.draft-ai"))
+            using(var reader=new StreamReader(resource))text.Children.Add(new Expander {Header="AI draft check · Marqo and OpenCV",Content=Label("Marqo NSFW Image Detection 384 weights and OpenCV 5.0.0 use the Apache 2.0 license. The model file is an ONNX conversion of Marqo's original checkpoint.\n\n"+reader.ReadToEnd())});
+            using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.gemma-runtime"))
+            using(var reader=new StreamReader(resource))text.Children.Add(new Expander {Header="Gemma 4 E2B and llama.cpp",Content=Label("Google Gemma 4 weights use Apache 2.0. The linked llama.cpp runtime uses MIT.\n\n"+reader.ReadToEnd())});
             text.Children.Add(new Expander {Header="Microsoft Windows components",Content=Label("WPF, Windows Imaging Component and .NET Framework are supplied by Windows.")});
             dialog.Show();
         }
@@ -151,10 +156,18 @@ namespace MediaReviewer {
         }
 
         void RetainOriginals() {
-            var selected=Selected();
-            if(selected.Any(c=>c.Record.Status!="NON_COMPLIANT"))throw new InvalidOperationException("Select Non-compliant items to retain originals without changing their saved decisions.");
-            if(!engine.VaultUnlocked){Unlock(RetainOriginals);return;}
-            Work(engine.RequestRetainOriginals(selected.Select(c=>c.Record.GroupId).ToArray(),selected.ToDictionary(c=>c.Record.GroupId,c=>c.Record.ReviewRevision),Id()),"Retain originals");
+            var selected=Selected().Select(c=>c.Record).ToArray();
+            if(selected.Length==0 || selected.Any(r=>r.Status!="NON_COMPLIANT"))
+                throw new InvalidOperationException("Select Non-compliant items to retain originals without changing their saved decisions.");
+            var catalog=engine;
+            var ids=selected.Select(r=>r.GroupId).ToArray();
+            var revisions=selected.ToDictionary(r=>r.GroupId,r=>r.ReviewRevision);
+            string operation=Id();
+            Action retain=()=>{
+                if(!Ready || engine!=catalog)return;
+                Work(catalog.RequestRetainOriginals(ids,revisions,operation),"Retain originals");
+            };
+            if(catalog.VaultUnlocked)retain();else Unlock(retain);
         }
 
         void Original(MediaRow row) {
@@ -185,37 +198,272 @@ namespace MediaReviewer {
             });
         }
 
-        void Maintenance() {
-            var menu=new ContextMenu();
-            Menu(menu,"Portable backup…",()=>{string path=SaveFile("SQLite database (*.sqlite)|*.sqlite","Media Review Backup.sqlite");if(path!=null)Work(engine.RequestBackup(path),"Backup");});
-            Menu(menu,"Check database integrity",()=>Work(engine.RequestIntegrity(),"Integrity check"));
-            Menu(menu,"Retention limits…",()=>Work(engine.RequestOriginalLimits(),"Read retention limits",r=>RetentionLimits(EvidenceFormat.Json().Deserialize<OriginalStorageLimits>(r.Value))));
-            Menu(menu,"Change originals password…",ChangePassword);
-            Menu(menu,"Use current source path as default",()=>ChangeDefaultSource(Box("SourceBox").Text.Trim()));
-            Menu(menu,"Clear default source path",()=>ChangeDefaultSource(""));
-            Menu(menu,"Sources / reconnect…",ManageSources);
-            Menu(menu,"Open catalog folder",()=>System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.GetDirectoryName(engine.DatabasePath)){UseShellExecute=true}));
-            Menu(menu,"Reconnect all sources…",()=>{
+        void PopulateMaintenanceItems(ItemsControl menu) {
+            Menu(menu,"💾 Portable backup…",()=>{string path=SaveFile("SQLite database (*.sqlite)|*.sqlite","Media Review Backup.sqlite");if(path!=null)Work(engine.RequestBackup(path),"Backup");});
+            Menu(menu,"✓ Check database integrity",()=>Work(engine.RequestIntegrity(),"Integrity check"));
+            Menu(menu,"🧹 Compact and clean up staging data",()=>Work(engine.RequestDatabaseCleanup(),"Catalog cleanup"));
+            Menu(menu,"📏 Retention limits…",()=>Work(engine.RequestOriginalLimits(),"Read retention limits",r=>RetentionLimits(EvidenceFormat.Json().Deserialize<OriginalStorageLimits>(r.Value))));
+            Menu(menu,"🔑 Change originals password…",ChangePassword);
+            Menu(menu,"📌 Use current source path as default",()=>ChangeDefaultSource(Box("SourceBox").Text.Trim()));
+            Menu(menu,"✖ Clear default source path",()=>ChangeDefaultSource(""));
+            Menu(menu,"🔗 Sources / reconnect…",ManageSources);
+            Menu(menu,"📁 Open catalog folder",()=>System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.GetDirectoryName(engine.DatabasePath)){UseShellExecute=true}));
+            Menu(menu,"🔄 Reconnect all sources…",()=>{
                 string path=PromptSource();
                 if(path!=null)Work(engine.RequestReconnectAll(path),"Reconnect all sources");
             });
-            Menu(menu,"Resume source reconnection",()=>Queue(engine.RequestReconnectAllStatus(),r=>{
+            Menu(menu,"▶ Resume source reconnection",()=>Queue(engine.RequestReconnectAllStatus(),r=>{
                 if(!r.Success){Message(r.Error);return;}
                 if(String.IsNullOrEmpty(r.Reconnection.Id)){Message("No saved reconnection.");return;}
                 Work(engine.RequestResumeReconnectAll(r.Reconnection.Id),"Resume reconnection");
             }));
-            Menu(menu,"Discard unfinished source reconnection",()=>Queue(engine.RequestReconnectAllStatus(),r=>{
+            Menu(menu,"🗑 Discard unfinished source reconnection",()=>Queue(engine.RequestReconnectAllStatus(),r=>{
                 if(!r.Success){Message(r.Error);return;}
                 if(String.IsNullOrEmpty(r.Reconnection.Id)){Message("No saved reconnection.");return;}
                 if(MessageBox.Show(Window,"Discard the unfinished source checks? Committed connections are preserved.","Discard source checks",MessageBoxButton.YesNo)==MessageBoxResult.Yes)
                     Work(engine.RequestDiscardReconnectAll(r.Reconnection.Id),"Discard source checks");
             }));
-            Menu(menu,"Export review report…",Report);
-            Menu(menu,"Export selected protected Evidence package…",()=>{
+            Menu(menu,"📊 Export review report…",Report);
+            Menu(menu,"📦 Export selected protected Evidence package…",()=>{
                 if(!engine.VaultUnlocked){Unlock(ExportPackage);return;}ExportPackage();
             });
-            Menu(menu,"Clean up unfinished originals",()=>{if(MessageBox.Show(Window,"Discard hidden unfinished original captures?","Clean up",MessageBoxButton.YesNo)==MessageBoxResult.Yes)Work(engine.RequestOriginalCleanup(),"Clean up originals");});
+            Menu(menu,"🧹 Clean up unfinished originals",()=>{if(MessageBox.Show(Window,"Discard hidden unfinished original captures?","Clean up",MessageBoxButton.YesNo)==MessageBoxResult.Yes)Work(engine.RequestOriginalCleanup(),"Clean up originals");});
+        }
+
+        ContextMenu CreateThemedMenu() {
+            var menu=new ContextMenu();
+            menu.Resources.MergedDictionaries.Add(Window.Resources);
+            var style=Window.Resources[typeof(ContextMenu)] as Style;
+            if(style!=null)menu.Style=style;
+            return menu;
+        }
+
+        void Maintenance() {
+            var menu=CreateThemedMenu();
+            PopulateMaintenanceItems(menu);
             menu.PlacementTarget=Button("MaintenanceButton");menu.IsOpen=true;
+        }
+
+        internal void ShowAppearanceMenu(Button target) {
+            var menu=CreateThemedMenu();
+            string current=CurrentThemeId();
+            foreach(var theme in Themes){
+                var def=theme;
+                var item=new MenuItem {Header=def.Label+(def.Id==current ? "  (Active)" : "")};
+                item.Click+=(s,e)=>Guard(()=>SetTheme(def.Id));
+                menu.Items.Add(item);
+            }
+            menu.Items.Add(new Separator());
+            Menu(menu,"↻ Cycle to next color mode",CycleTheme);
+            menu.PlacementTarget=target;menu.IsOpen=true;
+        }
+
+        void PromptAgeFilter() {
+            var body=new StackPanel {Margin=new Thickness(18)};var dialog=Dialog("Skip older files",body,430,240);
+            body.Children.Add(Label("Skip files older than how many years? (Enter 0 to include all files regardless of age.)"));
+            var box=Editor(Box("AgeBox").Text,8);body.Children.Add(box);
+            var actions=Bar();body.Children.Add(actions);
+            var apply=ActionButton("Save",()=>{
+                int n;if(!Int32.TryParse(box.Text.Trim(),out n) || n<0 || n>ScanOptions.MaxModifiedAgeYears)return;
+                Box("AgeBox").Text=n.ToString(CultureInfo.InvariantCulture);dialog.DialogResult=true;
+            });
+            apply.IsDefault=true;actions.Children.Add(apply);
+            actions.Children.Add(ActionButton("Cancel",dialog.Close));
+            dialog.ShowDialog();
+        }
+
+        string EditGemmaCriteria(Window owner,string criteria){
+            var body=new DockPanel {Margin=new Thickness(18)};
+            var dialog=Dialog("Gemma search criteria",body,690,515);
+            dialog.Owner=owner;
+            var guidance=Label("Describe what Gemma should look for in saved previews. Keep the five category labels A through E. Their scores are A 97%, B 90%, C 55%, D 8%, and E 82%. The suggestion threshold determines which categories appear for review.");
+            Dock(body,guidance,System.Windows.Controls.Dock.Top);
+            var editor=Editor(String.IsNullOrEmpty(criteria) ? GemmaCriteria.Default : criteria,GemmaCriteria.Limit);
+            editor.AcceptsReturn=true;editor.TextWrapping=TextWrapping.Wrap;
+            editor.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;editor.VerticalContentAlignment=VerticalAlignment.Top;
+            System.Windows.Automation.AutomationProperties.SetName(editor,"Gemma search criteria");
+            var bottom=new StackPanel();
+            Dock(body,bottom,System.Windows.Controls.Dock.Bottom);
+            var feedback=Label("Saving a changed rubric requires a new Gemma draft check. Human decisions are kept.");
+            feedback.MinHeight=36;bottom.Children.Add(feedback);
+            var actions=Bar();bottom.Children.Add(actions);
+            actions.Children.Add(ActionButton("Reset to default",()=>{editor.Text=GemmaCriteria.Default;editor.Focus();}));
+            string edited=criteria;
+            actions.Children.Add(ActionButton("Apply",()=>{
+                try{edited=GemmaCriteria.Normalize(editor.Text);dialog.DialogResult=true;}
+                catch(ArgumentException error){feedback.Text=error.Message;editor.Focus();}
+            }));
+            var cancel=ActionButton("Cancel",dialog.Close);cancel.IsCancel=true;actions.Children.Add(cancel);
+            body.Children.Add(editor);
+            dialog.Loaded+=(s,e)=>editor.Focus();
+            dialog.ShowDialog();
+            return edited;
+        }
+
+        void ShowDraftReview(){
+            if(!Ready)return;
+            bool available=DraftModelWorker.GemmaAvailable();
+            if(available!=gemmaAvailable){gemmaAvailable=available;refresh=true;view.Advance();}
+            var body=new StackPanel {Margin=new Thickness(18)};
+            var dialog=Dialog("AI draft check",body,590,510);
+            body.Children.Add(Label("Choose a model for saved still-image previews. Matches appear in AI suggestions for human confirmation."));
+            var model=new ComboBox();model.Items.Add("Marqo · fast image screening");
+            if(available)model.Items.Add("Gemma 4 E2B · workplace policy");
+            model.SelectedIndex=available && useGemma ? 1 : 0;
+            System.Windows.Automation.AutomationProperties.SetName(model,"AI review model");body.Children.Add(model);
+            if(!available)body.Children.Add(Label(DraftModelWorker.GemmaCpuSupported() ?
+                "Place both Gemma GGUF files beside FleetHacker to enable the Gemma option." :
+                "Gemma requires AVX2, FMA and F16C on this device."));
+            var devicePanel=new StackPanel();devicePanel.Children.Add(Label("Gemma processing device"));
+            var device=new ComboBox();device.Items.Add("Auto (use GPU when available)");device.Items.Add("CPU only");device.SelectedIndex=gemmaCpuOnly ? 1 : 0;
+            System.Windows.Automation.AutomationProperties.SetName(device,"Gemma processing device");devicePanel.Children.Add(device);body.Children.Add(devicePanel);
+            string savedCriteria=gemmaCriteria,criteria=savedCriteria;
+            Action updateCriteriaGuidance=()=>{};
+            var criteriaButtonLabel=Label(criteria=="" ? "Default rubric" : "Custom rubric");
+            var criteriaButton=ActionButton("Edit Gemma search criteria…",()=>{
+                criteria=EditGemmaCriteria(dialog,criteria);
+                criteriaButtonLabel.Text=criteria=="" ? "Default rubric" : "Custom rubric";
+                updateCriteriaGuidance();
+            });
+            criteriaButton.HorizontalAlignment=HorizontalAlignment.Left;
+            criteriaButton.IsEnabled=!engine.DraftReviewActive;
+            criteriaButton.ToolTip=engine.DraftReviewActive ? "Finish or stop the draft check before editing the criteria." : "Change what Gemma looks for in saved previews.";
+            var criteriaActions=new WrapPanel();criteriaActions.Children.Add(criteriaButton);criteriaActions.Children.Add(criteriaButtonLabel);devicePanel.Children.Add(criteriaActions);
+            if(available){
+                var catalog=engine;
+                var loadStatus=Label(catalog.GemmaStatus);devicePanel.Children.Add(loadStatus);
+                var timer=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(250)};
+                timer.Tick+=(s,e)=>{
+                    string message=catalog.GemmaStatus;
+                    if(message!=loadStatus.Text)loadStatus.Text=message;
+                };
+                dialog.Loaded+=(s,e)=>timer.Start();
+                dialog.Closed+=(s,e)=>timer.Stop();
+            }
+            var threshold=Label("");body.Children.Add(threshold);
+            var slider=new Slider {Minimum=1,Maximum=99,TickFrequency=1,IsSnapToTickEnabled=true,Margin=new Thickness(0,0,0,6)};
+            System.Windows.Automation.AutomationProperties.SetName(slider,"AI suggestion threshold in percent");
+            var guidance=Label("");
+            Action showThreshold=()=>threshold.Text="Suggestion threshold  "+((int)slider.Value).ToString(CultureInfo.InvariantCulture)+"%";
+            Action showModel=()=>{
+                bool gemma=model.SelectedIndex==1;
+                devicePanel.Visibility=gemma ? Visibility.Visible : Visibility.Collapsed;
+                slider.Value=gemma ? gemmaThreshold : marqoThreshold;showThreshold();
+                updateCriteriaGuidance();
+            };
+            updateCriteriaGuidance=()=>{
+                bool gemma=model.SelectedIndex==1;
+                guidance.Text=gemma && criteria!="" ? "The suggestion threshold applies to the five fixed category scores. Run Gemma again after changing the criteria." : gemma ? "The 55% default includes the ordinary swimwear tier. Raise it to 80% to focus on nudity, sexualized lingerie, and uncertain cases. Gemma is slower and uses more memory." : "The 7% default favors catching more images. Raise it to narrow the review queue. Changing the threshold reuses saved Marqo scores.";
+            };
+            slider.ValueChanged+=(s,e)=>showThreshold();model.SelectionChanged+=(s,e)=>showModel();showModel();
+            body.Children.Add(slider);body.Children.Add(guidance);
+            var actions=Bar();body.Children.Add(actions);
+            Action<bool> save=run=>Guard(()=>{
+                int percent=(int)slider.Value;
+                bool gemma=model.SelectedIndex==1;
+                bool cpuOnly=device.SelectedIndex==1;
+                bool criteriaChanged=gemma && criteria!=savedCriteria;
+                Queue(engine.RequestDraftThreshold(percent,gemma,cpuOnly,criteriaChanged ? criteria : null),result=>{
+                    if(!result.Success){Message("Could not save AI settings. "+result.Error);return;}
+                    if(gemma){gemmaThreshold=percent;gemmaCpuOnly=cpuOnly;if(criteriaChanged)gemmaCriteria=criteria;}else marqoThreshold=percent;
+                    useGemma=gemma;
+                    if(BucketKeys[bucket]==DraftReview.Bucket)NewPage(1);else{view.Advance();refresh=true;}
+                    Message(result.Value);
+                    if(run && Ready)Guard(()=>StartDraftReview(gemma,cpuOnly));
+                });
+                dialog.Close();
+            });
+            var start=ActionButton("Save and run",()=>save(true));
+            start.IsEnabled=task==null && !engine.Status.RunningScan && !engine.DraftReviewActive;
+            start.ToolTip="Scores new or changed previews with the selected local model.";
+            actions.Children.Add(start);actions.Children.Add(ActionButton("Save settings",()=>save(false)));
+            var cancel=ActionButton("Cancel",dialog.Close);cancel.IsCancel=true;actions.Children.Add(cancel);
+            dialog.ShowDialog();
+        }
+
+        void StartDraftReview(bool gemma,bool cpuOnly){
+            draftTask=engine.RequestDraftReview(gemma,cpuOnly);Message((gemma ? "Gemma" : "Marqo")+" draft check queued…");
+            Queue(draftTask,result=>{
+                draftTask=null;
+                Message(result.Success ? result.Value : result.Error);
+            });
+        }
+
+        internal void ShowSettingsCogMenu(Button target) {
+            var menu=CreateThemedMenu();
+            var openCatalog=new MenuItem {Header="📂 Open or create catalog…",IsEnabled=Button("CatalogButton").IsEnabled};
+            openCatalog.Click+=(s,e)=>Guard(ChooseDatabase);
+            menu.Items.Add(openCatalog);
+            menu.Items.Add(new Separator());
+
+            var scanSub=new MenuItem {Header="⚙ Scan settings ("+Mode()+" · "+Number("WorkerBox")+" workers)"};
+            string[] modes={"Quick","Deep","Custom"};
+            for(int i=0;i<modes.Length;i++){
+                int idx=i;
+                bool active=Combo("ModeBox").SelectedIndex==idx;
+                var mItem=new MenuItem {Header="Scan depth: "+modes[i]+(active ? "  (Active)" : "")};
+                mItem.Click+=(s,e)=>Guard(()=>{Combo("ModeBox").SelectedIndex=idx;});
+                scanSub.Items.Add(mItem);
+            }
+            scanSub.Items.Add(new Separator());
+            Menu(scanSub,"🗂 Choose file types & families…",ChooseFormats);
+            Menu(scanSub,"⚡ Scan options (AppData, ZIPs, Renamed files, Full SHA-256)…",ChooseOptions);
+            var workersSub=new MenuItem {Header="👷 Worker threads ("+Number("WorkerBox")+")"};
+            for(int w=1;w<=8;w++){
+                int count=w;
+                bool active=Number("WorkerBox")==count;
+                var wItem=new MenuItem {Header=count+" worker"+(count==1 ? "" : "s")+(active ? "  (Active)" : "")};
+                wItem.Click+=(s,e)=>Guard(()=>{Combo("WorkerBox").SelectedItem=count;});
+                workersSub.Items.Add(wItem);
+            }
+            scanSub.Items.Add(workersSub);
+            var ageSub=new MenuItem {Header="📅 Skip files older than ("+(Box("AgeBox").Text.Trim()=="0" ? "All ages" : Box("AgeBox").Text.Trim()+" yrs")+")"};
+            foreach(int yrs in new[]{0,1,2,3,5,10}){
+                int y=yrs;
+                bool active=Box("AgeBox").Text.Trim()==y.ToString(CultureInfo.InvariantCulture);
+                string label=(y==0 ? "0 years (Include all files)" : y+" year"+(y==1 ? "" : "s"))+(active ? "  (Active)" : "");
+                var aItem=new MenuItem {Header=label};
+                aItem.Click+=(s,e)=>Guard(()=>{Box("AgeBox").Text=y.ToString(CultureInfo.InvariantCulture);});
+                ageSub.Items.Add(aItem);
+            }
+            ageSub.Items.Add(new Separator());
+            Menu(ageSub,"Custom age limit…",PromptAgeFilter);
+            scanSub.Items.Add(ageSub);
+            menu.Items.Add(scanSub);
+
+            var previewTasks=new MenuItem {Header="🖼 Preview tasks…",IsEnabled=Ready};
+            previewTasks.Click+=(s,e)=>Guard(PreviewTasks);
+            menu.Items.Add(previewTasks);
+            var draftCheck=new MenuItem {Header="AI draft check…",IsEnabled=Button("AiDraftButton").IsEnabled};
+            draftCheck.Click+=(s,e)=>Guard(ShowDraftReview);menu.Items.Add(draftCheck);
+
+            var exportReport=new MenuItem {Header="📊 Export review report…",IsEnabled=Ready};
+            exportReport.Click+=(s,e)=>Guard(Report);
+            menu.Items.Add(exportReport);
+
+            var maintSub=new MenuItem {Header="🛠 Care & maintenance",IsEnabled=Ready};
+            PopulateMaintenanceItems(maintSub);
+            menu.Items.Add(maintSub);
+
+            menu.Items.Add(new Separator());
+            var appearSub=new MenuItem {Header="🎨 Appearance / color modes",IsEnabled=!SystemParameters.HighContrast};
+            string currentTheme=CurrentThemeId();
+            foreach(var theme in Themes){
+                var def=theme;
+                var tItem=new MenuItem {Header=def.Label+(def.Id==currentTheme ? "  (Active)" : "")};
+                tItem.Click+=(s,e)=>Guard(()=>SetTheme(def.Id));
+                appearSub.Items.Add(tItem);
+            }
+            menu.Items.Add(appearSub);
+
+            menu.Items.Add(new Separator());
+            var logItem=new MenuItem {Header="📋 Activity log…",IsEnabled=Ready};
+            logItem.Click+=(s,e)=>Guard(()=>Queue(engine.RequestLog(),r=>{if(r.Success)ShowText("Log",r.Value);else Message(r.Error);}));
+            menu.Items.Add(logItem);
+
+            Menu(menu,"💡 Guide & shortcuts",()=>Button("HelpButton").RaiseEvent(new RoutedEventArgs(System.Windows.Controls.Primitives.ButtonBase.ClickEvent)));
+            Menu(menu,"♥ About Media Review",About);
+            menu.PlacementTarget=target;menu.IsOpen=true;
         }
         string PromptSource() {
             var body=new StackPanel {Margin=new Thickness(16)};var dialog=Dialog("Reconnect all sources",body,650,285);
@@ -263,7 +511,7 @@ namespace MediaReviewer {
                 Message("Saving default source…");
             }catch{options.DefaultSourceRoot=previous;throw;}
         }
-        void Menu(ContextMenu menu,string label,Action action){var item=new MenuItem {Header=label};item.Click+=(s,e)=>Guard(action);menu.Items.Add(item);}
+        void Menu(ItemsControl menu,string label,Action action){var item=new MenuItem {Header=label};item.Click+=(s,e)=>Guard(action);menu.Items.Add(item);}
         void ExportPackage(){
             var chosen=Selected();if(chosen.Length==0 || chosen.Any(c=>c.Record.Status!="EVIDENCE"))throw new InvalidOperationException("Select Evidence cards to package.");
             string path=SaveFile("Evidence package (*.mcrevidence)|*.mcrevidence","Evidence.mcrevidence");

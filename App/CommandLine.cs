@@ -14,7 +14,7 @@ namespace MediaReviewer {
 
         internal static bool IsHeadless(string[] args) {
             if(args.Length==0)return false;
-            return args[0]=="--help" || args[0]=="--verify-dependencies" || args[0]=="--create-database" || args[0]=="--import-html" || (args[0]=="--database" && args.Length>2);
+            return args[0]=="--help" || args[0]=="--verify-dependencies" || args[0]=="--verify-draft-model" || args[0]=="--verify-gemma-model" || args[0]=="--create-database" || args[0]=="--import-html" || (args[0]=="--database" && args.Length>2);
         }
 
         static void AttachIfNeeded() {
@@ -25,10 +25,36 @@ namespace MediaReviewer {
         internal static int Run(string[] args) {
             AttachIfNeeded();
             if(args.Length==1 && args[0]=="--help"){
-                Console.WriteLine("Media Compliance Reviewer\n--database PATH\n--create-database PATH\n--import-html SOURCE DESTINATION\n--open-evidence-package PATH\n--verify-dependencies\n--database PATH --scan-root ROOT [--workers N] [--scan-mode quick|deep] [--extensions jpg,png] [--scan-archives] [--sniff-renamed] [--full-hash] [--include-appdata] [--include-root-files] [--max-age-years N]\n--database PATH --resume-scan ID|latest [--workers N]");
+                Console.WriteLine("Media Compliance Reviewer\n--database PATH\n--create-database PATH\n--import-html SOURCE DESTINATION\n--open-evidence-package PATH\n--verify-dependencies\n--verify-gemma-model [--cpu-only] IMAGE [IMAGE ...]\n--database PATH --scan-root ROOT [--workers N] [--scan-mode quick|deep] [--extensions jpg,png] [--scan-archives] [--no-sniff-renamed] [--full-hash] [--include-appdata] [--exclude-root-files] [--max-age-years N]\n--database PATH --resume-scan ID|latest [--workers N]");
                 return 0;
             }
             if(args.Length==1 && args[0]=="--verify-dependencies"){VerifyDependencies();return 0;}
+            if(args.Length==1 && args[0]=="--verify-draft-model"){
+                byte[] image=Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/3Z8AAAAASUVORK5CYII=");
+                using(var worker=new DraftModelWorker()){
+                    double? score=worker.Score(image,CancellationToken.None);
+                    if(!score.HasValue || Double.IsNaN(score.Value) || score<0 || score>1 || worker.Score(new byte[]{0,1,2},CancellationToken.None)!=null || worker.Score(image,CancellationToken.None)!=score)
+                        throw new InvalidDataException("Unexpected AI model fixture result.");
+                    Console.WriteLine("Verified local Marqo draft worker. Generated fixture score "+score.Value.ToString("R",CultureInfo.InvariantCulture)+".");
+                }
+                return 0;
+            }
+            if(args[0]=="--verify-gemma-model"){
+                bool cpuOnly=args.Length>1 && args[1]=="--cpu-only";
+                int first=cpuOnly ? 2 : 1;
+                if(args.Length-first<1 || args.Length-first>20)throw new ArgumentException("Supply 1 to 20 local images for Gemma verification.");
+                using(var worker=new DraftModelWorker(true,cpuOnly)){
+                    string device=null;
+                    for(int i=first;i<args.Length;i++){
+                        double? score=worker.Score(Preview.Create(args[i]).Bytes,CancellationToken.None);
+                        int fixture=i-first+1;
+                        if(!score.HasValue)throw new InvalidDataException("Fixture "+fixture+" could not be scored.");
+                        if(device!=worker.Device){device=worker.Device;Console.WriteLine("Gemma device: "+device);}
+                        Console.WriteLine("Fixture "+fixture+": "+score.Value.ToString("P0",CultureInfo.InvariantCulture));
+                    }
+                }
+                return 0;
+            }
             if(args.Length==2 && args[0]=="--create-database"){
                 using(var engine=ReviewerEngine.Open(args[1],true)){AwaitReady(engine);Console.WriteLine("Created catalog · "+engine.DatabasePath);}return 0;
             }
@@ -66,7 +92,7 @@ namespace MediaReviewer {
         sealed class ScanArguments {public ScanOptions Scan;public string Resume;}
         static ScanArguments ParseScan(string[] args) {
             var values=new Dictionary<string,string>(StringComparer.Ordinal);
-            var switches=new HashSet<string>(new[]{"--scan-archives","--sniff-renamed","--full-hash","--include-appdata","--include-root-files"},StringComparer.Ordinal);
+            var switches=new HashSet<string>(new[]{"--scan-archives","--sniff-renamed","--no-sniff-renamed","--full-hash","--include-appdata","--include-root-files","--exclude-root-files"},StringComparer.Ordinal);
             var names=new HashSet<string>(new[]{"--scan-root","--resume-scan","--workers","--scan-mode","--extensions","--max-age-years"},StringComparer.Ordinal);
             for(int i=0;i<args.Length;i++){
                 string key=args[i];if(values.ContainsKey(key))throw new ArgumentException("Duplicate option "+key);
@@ -77,12 +103,13 @@ namespace MediaReviewer {
             string resume,root;
             bool resuming=values.TryGetValue("--resume-scan",out resume),scanning=values.TryGetValue("--scan-root",out root);
             if(resuming==scanning || (resuming && values.Keys.Any(k=>k!="--resume-scan" && k!="--workers")))throw new ArgumentException("Choose one start or resume action. A resumed scan retains its saved options.");
+            if(values.ContainsKey("--sniff-renamed") && values.ContainsKey("--no-sniff-renamed") || values.ContainsKey("--include-root-files") && values.ContainsKey("--exclude-root-files"))throw new ArgumentException("Choose one setting for each scan option.");
             int workers=Number(values,"--workers",4,1,8),age=Number(values,"--max-age-years",0,0,ScanOptions.MaxModifiedAgeYears);
             string mode,extensions;
             if(!values.TryGetValue("--scan-mode",out mode))mode="quick";
             if(mode!="quick" && mode!="deep")throw new ArgumentException("Use quick or deep for --scan-mode.");
             return new ScanArguments {Resume=resume,Scan=new ScanOptions {RootPath=root,WorkerCount=workers,ModifiedAgeYears=age,
-                ExcludeApplicationData=mode!="deep" && !values.ContainsKey("--include-appdata"),IncludeRootFiles=values.ContainsKey("--include-root-files"),ScanArchives=values.ContainsKey("--scan-archives"),SniffRenamed=values.ContainsKey("--sniff-renamed"),
+                ExcludeApplicationData=mode!="deep" && !values.ContainsKey("--include-appdata"),IncludeRootFiles=!values.ContainsKey("--exclude-root-files"),ScanArchives=values.ContainsKey("--scan-archives"),SniffRenamed=!values.ContainsKey("--no-sniff-renamed"),
                 Extensions=values.TryGetValue("--extensions",out extensions) ? extensions.Split(',').Select(x=>x.Trim()).ToArray() : mode=="deep" ? Formats.Deep : Formats.Quick,
                 FingerprintPolicy=values.ContainsKey("--full-hash") ? FingerprintPolicy.Full() : new FingerprintPolicy()}};
         }
@@ -99,8 +126,7 @@ namespace MediaReviewer {
         }
 
         static void VerifyDependencies() {
-            Directory.CreateDirectory(Native.RuntimeDirectory);
-            string path=Path.Combine(Native.RuntimeDirectory,"dependency-preview.png");
+            string path=Path.Combine(MediaScratch.EnsureDirectory(),"dependency-preview.png");
             try {
                 File.WriteAllBytes(path,Convert.FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/3Z8AAAAASUVORK5CYII="));
                 if(Preview.Create(path).Width!=1)throw new InvalidDataException("The isolated decoder did not return the expected fixture.");

@@ -85,7 +85,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if (FAILED(hr)) {
         wchar_t message[256];
         swprintf(message, 256, L"Error 0x%08lX while %ls.", (unsigned long)hr, stage);
-        if (!wcsstr(arguments, L"--self-test") && !wcsstr(arguments, L"--window-smoke") && !wcsstr(arguments, L"--preview-worker") && !wcsstr(arguments, L"--verify-previews") && !wcsstr(arguments, L"--verify-import"))
+        if (!wcsstr(arguments, L"--self-test") && !wcsstr(arguments, L"--window-smoke") && !wcsstr(arguments, L"--preview-worker") && !wcsstr(arguments, L"--draft-worker") && !wcsstr(arguments, L"--verify-previews") && !wcsstr(arguments, L"--verify-import"))
             MessageBoxW(NULL, message, L"Media Compliance Reviewer could not start", MB_OK | MB_ICONERROR);
         fwprintf(stderr, L"%ls\n", message);
         return 1;

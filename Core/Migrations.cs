@@ -157,6 +157,14 @@ CREATE VIEW group_occurrences AS
  SELECT g.id,o.rowid,o.id,o.root_id,g.content_id,o.path,o.path_key,o.name,o.extension,o.user_folder,o.size,o.modified_ticks,o.file_identity,o.last_scan_id,o.superseded
  FROM identity_plan p JOIN identity_runs r ON r.id=p.run_id AND r.state='published' JOIN resolved_locations l ON l.run_id=p.run_id AND l.digest=p.digest JOIN review_groups g ON g.id=p.group_id AND g.retired=0 JOIN occurrences o ON o.id=l.occurrence_id;
 ";
+        internal const string Schema12=@"CREATE TABLE ai_draft_scores(content_id INTEGER PRIMARY KEY REFERENCES contents(id) ON DELETE CASCADE,preview_revision INTEGER NOT NULL,model TEXT NOT NULL,score REAL NOT NULL CHECK(score BETWEEN 0 AND 1));
+CREATE INDEX ai_draft_rank ON ai_draft_scores(model,score DESC,content_id);";
+        internal const string Schema13=@"ALTER TABLE ai_draft_scores RENAME TO ai_draft_scores_v12;
+DROP INDEX ai_draft_rank;
+CREATE TABLE ai_draft_scores(content_id INTEGER NOT NULL REFERENCES contents(id) ON DELETE CASCADE,preview_revision INTEGER NOT NULL,model TEXT NOT NULL,score REAL NOT NULL CHECK(score BETWEEN 0 AND 1),PRIMARY KEY(content_id,model));
+INSERT INTO ai_draft_scores SELECT content_id,preview_revision,model,score FROM ai_draft_scores_v12;
+DROP TABLE ai_draft_scores_v12;
+CREATE INDEX ai_draft_rank ON ai_draft_scores(model,score DESC,content_id);";
         internal static void Apply(SqliteConnection writer,int targetVersion,CancellationToken token,Action<OperationProgress> progress) {
             int version=Convert.ToInt32(writer.Scalar("PRAGMA user_version"));
             if(version==targetVersion)return;
@@ -173,7 +181,7 @@ CREATE VIEW group_occurrences AS
                 try {if(rebuilding)writer.Execute("PRAGMA foreign_keys=OFF");
                     if(progress!=null)progress(new OperationProgress {Kind="Upgrade",State="running",Stage="Upgrading database schema "+version+" to "+(version+1),Unit="SQLite steps",LastProgressUtc=DateTime.UtcNow});
                     Sql.sqlite3_progress_handler(writer.Handle,2000,check,IntPtr.Zero);
-                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : Schema11);token.ThrowIfCancellationRequested();
+                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : version==10 ? Schema11 : version==11 ? Schema12 : Schema13);token.ThrowIfCancellationRequested();
                     if(rebuilding && writer.Query("PRAGMA foreign_key_check",new object[0],1).Count!=0)throw new InvalidDataException("Upgrade foreign-key validation failed; the original schema is retained.");
                     token.ThrowIfCancellationRequested();Sql.sqlite3_progress_handler(writer.Handle,0,null,IntPtr.Zero);
                     writer.Execute("PRAGMA user_version="+(version+1));writer.Execute("COMMIT");version++;}

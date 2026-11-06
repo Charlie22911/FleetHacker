@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security;
@@ -10,11 +11,13 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace MediaReviewer {
     internal sealed class WorkspacePreferences {
         public WorkspacePreferences(){}
         public bool Dark {get;set;}
+        public string Theme {get;set;}
         public bool Thumbnails {get;set;}
         public bool SidebarCollapsed {get;set;}
         public bool PreviewCollapsed {get;set;}
@@ -57,6 +60,7 @@ namespace MediaReviewer {
         enum ReviewView { List, Thumbnails, Quick }
         ReviewView display;
         WorkspacePreferences workspace;
+        ReviewFullScreen quickFullScreen;
         bool persistWorkspace;
         int quickIndex;
         string columnSort;
@@ -65,6 +69,9 @@ namespace MediaReviewer {
         int quickDecodeSide;
         MediaRow quickVideoRow;
         VideoPlaybackControls quickPlayer;
+        DispatcherTimer quickVideoWarmup;
+        double quickZoom=1.0,quickPanX,quickPanY;
+        int quickRotation;
         static string WindowsReviewerLabel(){
             string name=Environment.UserDomainName+"\\"+Environment.UserName;
             return name.Length<=128 ? name : Environment.UserName.Length<=128 ? Environment.UserName : "";
@@ -95,11 +102,16 @@ namespace MediaReviewer {
             for(int i=0;i<BucketKeys.Length;i++){
                 int index=i;Click("Queue"+i,()=>Combo("ViewBox").SelectedIndex=index);
             }
-            Click("ThemeButton",()=>{workspace.Dark=!workspace.Dark;ApplyTheme();});
+            Click("SettingsCogButton",()=>ShowSettingsCogMenu(Button("SettingsCogButton")));
+            Click("ScanCogButton",()=>ShowSettingsCogMenu(Button("ScanCogButton")));
+            Click("ThemeButton",()=>{
+                if(!persistWorkspace){CycleTheme();return;}
+                ShowAppearanceMenu(Button("ThemeButton"));
+            });
             Click("ListModeButton",()=>SetView(ReviewView.List));
             Click("ThumbnailsModeButton",()=>SetView(ReviewView.Thumbnails));
             Click("QuickModeButton",()=>OpenQuick(FocusedCard()));
-            Click("RefreshViewButton",()=>{view.Advance();refresh=true;refillRequested=false;foreach(var card in cards)card.ImageQueued=false;});
+            Click("RefreshViewButton",()=>{view.Advance();refresh=true;foreach(var card in cards)card.ImageQueued=false;});
             Click("QueueSidebarButton",()=>{workspace.SidebarCollapsed=!workspace.SidebarCollapsed;UpdateWorkspace();});
             Click("TopControlsButton",()=>{workspace.TopCollapsed=!workspace.TopCollapsed;UpdateWorkspace();});
             Click("PreviewPaneButton",()=>{workspace.PreviewCollapsed=!workspace.PreviewCollapsed;UpdateWorkspace();});
@@ -111,7 +123,17 @@ namespace MediaReviewer {
             Click("QuickNextButton",()=>{FocusQuick();RunQuickAction(Key.Right);});
             Click("QuickNonCompliantButton",()=>{FocusQuick();RunQuickAction(Key.Down);});
             Click("QuickCompliantButton",()=>{FocusQuick();RunQuickAction(Key.Up);});
+            Click("QuickUndoButton",()=>{FocusQuick();UndoLastReview();});
+            quickFullScreen=new ReviewFullScreen(Window);
+            Click("QuickFullScreenButton",ToggleQuickFullScreen);
             Click("QuickInspectButton",()=>{var card=QuickCard();if(card!=null)Inspect(card.Record);});
+            Click("QuickZoomInButton",()=>{FocusQuick();AdjustQuickZoom(1.25);});
+            Click("QuickZoomOutButton",()=>{FocusQuick();AdjustQuickZoom(0.8);});
+            Click("QuickZoomResetButton",()=>{FocusQuick();ResetQuickTransform();});
+            Click("QuickRotateLeftButton",()=>{FocusQuick();RotateQuick(-90);});
+            Click("QuickRotateRightButton",()=>{FocusQuick();RotateQuick(90);});
+            quickVideoWarmup=new DispatcherTimer(DispatcherPriority.Background){Interval=TimeSpan.FromMilliseconds(350)};
+            quickVideoWarmup.Tick+=(s,e)=>{quickVideoWarmup.Stop();if(quickPlayer!=null)quickPlayer.Prepare();};
             SetUpQuickGestures();
             Window.PreviewKeyDown+=ReviewKey;
             Get<Grid>("ReviewArea").SizeChanged+=(s,e)=>{
@@ -122,21 +144,68 @@ namespace MediaReviewer {
             SetView(workspace.Thumbnails ? ReviewView.Thumbnails : ReviewView.List);
         }
 
+        internal sealed class ThemeDefinition {
+            internal string Id,Label;
+            internal bool IsDark;
+            internal string[] Colors;
+        }
+        internal static readonly ThemeDefinition[] Themes=new[]{
+            new ThemeDefinition {Id="warm-light",Label="☀ Warm Light (Cream & Terracotta)",IsDark=false,
+                Colors=new[]{"#FAF5EE","#FFFDF9","#33261E","#7D6B5D","#F2EAE0","#E5D9C8","#2C2018","#FBF5EE","#4A3528","#D97742","#C86432","#FFFDF9","#E3F3E8","#1E6339","#FCE8E4","#9E2B25","#FEF3E7","#FDE68A","#78350F"}},
+            new ThemeDefinition {Id="cozy-dark",Label="🌙 Cozy Dark (Warm Mocha)",IsDark=true,
+                Colors=new[]{"#1B1613","#27201C","#F7EFE6","#B5A292","#201A16","#3E322B","#15110E","#F7EFE6","#382B23","#F4A261","#E07A5F","#FFFFFF","#1F3A2B","#BCE5CA","#482323","#FAD1D1","#362820","#6B4415","#FDE68A"}},
+            new ThemeDefinition {Id="midnight-dark",Label="🌑 Midnight Dark (Slate & Sky)",IsDark=true,
+                Colors=new[]{"#0F141C","#18202C","#ECF2F8","#94A3B8","#131A24","#2D3B4E","#0B0F17","#ECF2F8","#1E293B","#38BDF8","#0284C7","#FFFFFF","#133829","#86EFAC","#451A23","#FCA5A5","#1E2D40","#713F12","#FEF08A"}},
+            new ThemeDefinition {Id="neon-green",Label="💻 Terminal Matrix (Dark + Neon Green)",IsDark=true,
+                Colors=new[]{"#070B07","#0E150E","#39FF14","#22C55E","#0A100A","#1E3F20","#050805","#39FF14","#132A15","#00FF66","#15803D","#39FF14","#0F2E18","#4ADE80","#3B1219","#FF6B6B","#142E16","#3F320A","#FACC15"}},
+            new ThemeDefinition {Id="synthwave-dark",Label="⚡ Synthwave Night (Dark + Neon Cyan)",IsDark=true,
+                Colors=new[]{"#120D1D","#1C152E","#E0F2FE","#C084FC","#161024","#3B2854","#0D0916","#F0F9FF","#2E1F47","#06B6D4","#D946EF","#FFFFFF","#113634","#5EEAD4","#4C152E","#FDA4AF","#2A1B4E","#5C3409","#FDE047"}},
+            new ThemeDefinition {Id="forest-sage",Label="🌲 Forest Sage (Soft Earthy Green)",IsDark=false,
+                Colors=new[]{"#F1F5F0","#FAFCF9","#1C2D20","#5A7060","#E4ECE2","#CBD8C8","#18281D","#F2F7F2","#2A4231","#40916C","#2D6A4F","#FFFFFF","#DCFCE7","#166534","#FEE2E2","#991B1B","#E3F2E8","#FEF3C7","#92400E"}},
+            new ThemeDefinition {Id="nordic-light",Label="❄ Nordic Daylight (Cool Frost)",IsDark=false,
+                Colors=new[]{"#F3F6FA","#FFFFFF","#1E293B","#64748B","#E8EEF5","#D4DEE9","#1E293B","#F8FAFC","#334155","#0284C7","#0369A1","#FFFFFF","#E0F2FE","#0369A1","#FFE4E6","#BE123C","#E6F2FF","#FEF3C7","#92400E"}}
+        };
+
+        string CurrentThemeId() {
+            if(!String.IsNullOrEmpty(workspace.Theme) && Themes.Any(t=>t.Id==workspace.Theme))return workspace.Theme;
+            return workspace.Dark ? "cozy-dark" : "warm-light";
+        }
+        internal void SetTheme(string id) {
+            var def=Themes.FirstOrDefault(t=>t.Id==id)??Themes[0];
+            workspace.Theme=def.Id;
+            workspace.Dark=def.IsDark;
+            ApplyTheme();
+            if(persistWorkspace)workspace.Save();
+        }
+        internal void CycleTheme() {
+            string current=CurrentThemeId();
+            int index=Array.FindIndex(Themes,t=>t.Id==current);
+            SetTheme(Themes[(index+1)%Themes.Length].Id);
+        }
+
         void ApplyTheme() {
-            string[] keys={"PageBrush","SurfaceBrush","TextBrush","MutedBrush","InsetBrush","BorderBrush","SidebarBrush","SidebarTextBrush","SidebarActiveBrush","FocusBrush","PrimaryBrush","PrimaryTextBrush","GoodBrush","GoodTextBrush","BadBrush","BadTextBrush"};
-            string[] light={"#F4F7FB","#FFFFFF","#1C2B3A","#506176","#E8EEF5","#D5DEE8","#10243F","#F3F8FF","#24476B","#2873AC","#147A64","#FFFFFF","#E7F6EF","#0B6540","#FDECEC","#9D221A"};
-            string[] dark={"#141D28","#202C3B","#F0F5FA","#C3D2E3","#182331","#53647A","#10243F","#F3F8FF","#325980","#8AD1FF","#137960","#FFFFFF","#194335","#C6F4DC","#592D37","#FFE0E0"};
-            Color[] contrast={SystemColors.WindowColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.HighlightColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor};
+            string[] keys={"PageBrush","SurfaceBrush","TextBrush","MutedBrush","InsetBrush","BorderBrush","SidebarBrush","SidebarTextBrush","SidebarActiveBrush","FocusBrush","PrimaryBrush","PrimaryTextBrush","GoodBrush","GoodTextBrush","BadBrush","BadTextBrush","SelectedCardBrush","BadgeWarnBrush","BadgeWarnTextBrush"};
+            var def=Themes.FirstOrDefault(t=>t.Id==CurrentThemeId())??Themes[0];
+            workspace.Theme=def.Id;workspace.Dark=def.IsDark;
+            Color[] contrast={SystemColors.WindowColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.HighlightColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowTextColor,SystemColors.WindowColor,SystemColors.WindowColor,SystemColors.WindowTextColor};
             for(int i=0;i<keys.Length;i++){
-                var brush=new SolidColorBrush(SystemParameters.HighContrast ? contrast[i] : (Color)ColorConverter.ConvertFromString((workspace.Dark ? dark : light)[i]));
+                var brush=new SolidColorBrush(SystemParameters.HighContrast ? contrast[i] : (Color)ColorConverter.ConvertFromString(def.Colors[i]));
                 brush.Freeze();Window.Resources[keys[i]]=brush;
             }
-            Button("ThemeButton").Content=workspace.Dark ? "Light mode" : "Dark mode";
+            var list=Get<ListView>("ReviewList");
+            if(list!=null && !SystemParameters.HighContrast){
+                list.Resources[SystemColors.HighlightBrushKey]=Window.Resources["PrimaryBrush"];
+                list.Resources[SystemColors.HighlightTextBrushKey]=Window.Resources["PrimaryTextBrush"];
+                list.Resources[SystemColors.InactiveSelectionHighlightBrushKey]=Window.Resources["PrimaryBrush"];
+                list.Resources[SystemColors.InactiveSelectionHighlightTextBrushKey]=Window.Resources["PrimaryTextBrush"];
+            }
+            Button("ThemeButton").Content="🎨 Appearance";
+            Button("ThemeButton").ToolTip="Appearance · "+def.Label;
             Button("ThemeButton").IsEnabled=!SystemParameters.HighContrast;
         }
 
         void SetView(ReviewView mode) {
-            if(display==ReviewView.Quick && mode!=display){CancelQuickGesture();ResetQuickPreview();}
+            if(display==ReviewView.Quick && mode!=display){quickFullScreen.Set(false);CancelQuickGesture();ResetQuickPreview();}
             display=mode;
             if(mode!=ReviewView.Quick)workspace.Thumbnails=mode==ReviewView.Thumbnails;
             UpdateControls();
@@ -154,19 +223,56 @@ namespace MediaReviewer {
         void ResetQuickPreview(){
             if(quickSource!=null && inspector==null)loader.CancelInspect(inspection.Advance());
             quickSource=null;quickDecodeSide=0;Get<Image>("QuickDetailImage").Source=null;
+            ResetQuickTransform();
             ClearQuickVideo();
+        }
+        void ResetQuickTransform(){
+            quickZoom=1.0;quickPanX=quickPanY=0;quickRotation=0;
+            ApplyQuickTransform();
+        }
+        void AdjustQuickZoom(double factor){
+            if(display!=ReviewView.Quick || QuickCard()==null)return;
+            quickZoom=Math.Max(1.0,Math.Min(6.0,quickZoom*factor));
+            if(quickZoom<=1.02){quickZoom=1.0;quickPanX=quickPanY=0;}
+            ApplyQuickTransform();
+        }
+        void RotateQuick(int deltaDegrees){
+            if(display!=ReviewView.Quick || QuickCard()==null)return;
+            quickRotation=((quickRotation+deltaDegrees)%360+360)%360;
+            ApplyQuickTransform();
+        }
+        void ApplyQuickTransform(){
+            var surface=Get<FrameworkElement>("QuickZoomSurface");
+            if(surface==null)return;
+            surface.LayoutTransform=quickRotation==0 ? Transform.Identity : new RotateTransform(quickRotation);
+            if(quickZoom<=1.01){
+                surface.RenderTransform=Transform.Identity;
+            }else{
+                var group=new TransformGroup();
+                group.Children.Add(new ScaleTransform(quickZoom,quickZoom));
+                group.Children.Add(new TranslateTransform(quickPanX,quickPanY));
+                surface.RenderTransform=group;
+            }
+            var resetBtn=Button("QuickZoomResetButton");
+            if(resetBtn!=null)resetBtn.Content=quickZoom<=1.01 && quickRotation==0 ? "Fit" : Math.Round(quickZoom*100)+"%"+(quickRotation==0 ? "" : " · "+quickRotation+"°");
+        }
+
+        void ToggleQuickFullScreen(){
+            if(!quickFullScreen.Active && (display!=ReviewView.Quick || QuickCard()==null))return;
+            quickFullScreen.Set(!quickFullScreen.Active);
+            UpdateWorkspace();FocusQuick();
         }
 
         void ClearQuickVideo() {
             if(quickPlayer==null)return;
-            quickPlayer.Dispose();
+            quickVideoWarmup.Stop();quickPlayer.Dispose();
             quickPlayer=null;quickVideoRow=null;
             var host=Get<ContentControl>("QuickVideoHost");
             host.Content=null;host.Visibility=Visibility.Collapsed;
         }
 
         static bool CanPlayQuickVideo(MediaRow row) {
-            return row!=null && Formats.IsVideo(row.Extension) && row.Status!="EVIDENCE" && !row.SourceIsHistorical &&
+            return row!=null && Formats.IsPlayable(row.Extension) && row.Status!="EVIDENCE" && !row.SourceIsHistorical &&
                 !String.IsNullOrEmpty(row.RootPath) && !String.IsNullOrEmpty(row.RelativePath) && !Archives.IsPath(row.RelativePath);
         }
 
@@ -185,9 +291,13 @@ namespace MediaReviewer {
             if(SamePreviewSource(quickVideoRow,row))return;
             ResetQuickPreview();
             quickPlayer=CreateVideoPlayer(Get<Grid>("QuickVideoSurface"),row);
+            quickPlayer.AttachPoster(Get<Image>("QuickBaseImage"));
+            quickPlayer.ToggleFullScreen=ToggleQuickFullScreen;
+            quickPlayer.AttachHoverHost(Get<Grid>("QuickStage"),Get<Grid>("QuickImageHost"));
             quickVideoRow=row;
             var host=Get<ContentControl>("QuickVideoHost");
             host.Content=quickPlayer;host.Visibility=Visibility.Visible;
+            if(!Formats.UsesPlaybackProxy(row.Extension))quickVideoWarmup.Start();
         }
         void LoadQuickPreview() {
             if(display!=ReviewView.Quick || inspector!=null)return;
@@ -233,17 +343,49 @@ namespace MediaReviewer {
         }
 
         void ReviewKey(object sender,KeyEventArgs e) {
-            if(!Ready || e.Handled || Keyboard.Modifiers!=ModifierKeys.None)return;
+            if(e.Handled)return;
+            if(quickFullScreen.Active && e.Key==Key.Escape){
+                e.Handled=true;if(!e.IsRepeat)Guard(ToggleQuickFullScreen);return;
+            }
+            if(!Ready)return;
+            for(var node=Keyboard.FocusedElement as DependencyObject;node!=null;node=node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
+                if(node is TextBoxBase || node is PasswordBox || node is ComboBox)return;
+            if(Keyboard.Modifiers==ModifierKeys.Control && e.Key==Key.Z && !e.IsRepeat){
+                e.Handled=true;Guard(UndoLastReview);return;
+            }
+            if(Keyboard.Modifiers!=ModifierKeys.None)return;
+            if(display==ReviewView.Quick && (e.Key==Key.F || e.Key==Key.F11)){
+                e.Handled=true;if(!e.IsRepeat)Guard(ToggleQuickFullScreen);return;
+            }
+            if(display==ReviewView.Quick && e.Key==Key.Space && quickPlayer!=null && Get<Grid>("QuickImageHost").IsKeyboardFocusWithin){
+                e.Handled=true;if(!e.IsRepeat)quickPlayer.TogglePlay();return;
+            }
             Key direction=e.Key;
             if((direction==Key.Left || direction==Key.Right || direction==Key.Up || direction==Key.Down) &&
                 display==ReviewView.Quick && Get<FrameworkElement>("QuickImageHost").IsKeyboardFocusWithin){
                 e.Handled=true;if(!e.IsRepeat)Guard(()=>RunQuickAction(direction));return;
             }
+            if(display==ReviewView.Quick && e.Key==Key.R && !e.IsRepeat){
+                e.Handled=true;Guard(()=>RotateQuick(90));return;
+            }
             if(e.IsRepeat || (e.Key!=Key.C && e.Key!=Key.N))return;
-            for(var node=Keyboard.FocusedElement as DependencyObject;node!=null;node=node is Visual ? VisualTreeHelper.GetParent(node) : LogicalTreeHelper.GetParent(node))
-                if(node is TextBoxBase || node is PasswordBox || node is ComboBox)return;
             if(display!=ReviewView.Quick && Selected().Length==0)return;
             e.Handled=true;Guard(()=>ReviewWorkspaceItems(e.Key==Key.C ? "COMPLIANT" : "NON_COMPLIANT"));
+        }
+
+        static readonly Dictionary<string,string> ColumnTitles=new Dictionary<string,string>{
+            {"name","Name"},{"folder","Folder"},{"type","Type"},{"size","Size"},{"modified","Modified"},{"reviewer","Reviewed by"}
+        };
+        void UpdateColumnHeaders(){
+            var grid=Get<ListView>("ReviewList").View as GridView;
+            if(grid==null)return;
+            foreach(var col in grid.Columns){
+                var header=col.Header as GridViewColumnHeader;
+                var tag=header==null ? null : header.Tag as string;
+                string baseTitle;
+                if(tag!=null && ColumnTitles.TryGetValue(tag,out baseTitle))
+                    header.Content=columnSort==tag ? baseTitle+(columnDescending ? " ▼" : " ▲") : baseTitle;
+            }
         }
 
         void SortColumn(object sender,RoutedEventArgs args){
@@ -251,16 +393,20 @@ namespace MediaReviewer {
             var sort=header==null ? null : header.Tag as string;
             if(!Ready || sort==null)return;
             columnDescending=columnSort==sort ? !columnDescending : sort=="size" || sort=="modified";
-            columnSort=sort;NewPage(1);
+            columnSort=sort;UpdateColumnHeaders();NewPage(1);
         }
 
         void UpdateWorkspace() {
             if(workspace==null)return;
-            bool showSidebar=!workspace.SidebarCollapsed;
+            bool full=quickFullScreen!=null && quickFullScreen.Active;
+            var chrome=full ? Visibility.Collapsed : Visibility.Visible;
+            foreach(string name in new[]{"SidebarEdge","TopHeaderBar","TopControlsEdge","PaginationBar","StatusPanel"})
+                Get<FrameworkElement>(name).Visibility=chrome;
+            bool showSidebar=!workspace.SidebarCollapsed && !full;
             Get<FrameworkElement>("QueueSidebar").Visibility=showSidebar ? Visibility.Visible : Visibility.Collapsed;
             Get<FrameworkElement>("CompactQueues").Visibility=showSidebar ? Visibility.Collapsed : Visibility.Visible;
             SetPaneTab("QueueSidebarButton",showSidebar ? "Left" : "Right",showSidebar ? "Collapse left sidebar" : "Expand left sidebar");
-            Get<FrameworkElement>("TopControls").Visibility=workspace.TopCollapsed ? Visibility.Collapsed : Visibility.Visible;
+            Get<FrameworkElement>("TopControls").Visibility=workspace.TopCollapsed || full ? Visibility.Collapsed : Visibility.Visible;
             SetPaneTab("TopControlsButton",workspace.TopCollapsed ? "Down" : "Up",workspace.TopCollapsed ? "Expand top controls" : "Collapse top controls");
             for(int i=0;i<BucketKeys.Length;i++){
                 var queue=Button("Queue"+i);queue.Tag=bucket==i ? "Active" : null;queue.IsEnabled=Ready;
@@ -275,17 +421,26 @@ namespace MediaReviewer {
             Get<FrameworkElement>("PreviewEdge").Visibility=showPreviewTab ? Visibility.Visible : Visibility.Collapsed;
             SetPaneTab("PreviewPaneButton",workspace.PreviewCollapsed ? "Left" : "Right",workspace.PreviewCollapsed ? "Expand right preview" : "Collapse right preview");
             Button("PaneDetailsButton").IsEnabled=Button("PaneInspectButton").IsEnabled=Ready && focus!=null;
-            bool video=focus!=null && Formats.IsVideo(focus.Record.Extension);
-            Button("PaneInspectButton").Content=Button("QuickInspectButton").Content=video ? "Inspect / video" : "Inspect";
+            bool video=focus!=null && Formats.IsPlayable(focus.Record.Extension);
+            bool animation=focus!=null && focus.Record.Extension=="gif";
+            Button("PaneInspectButton").Content=Button("QuickInspectButton").Content=animation ? "Inspect / animation" : video ? "🎬 Inspect / video" : "🔍 Inspect";
             Button("PaneInspectButton").ToolTip=Button("QuickInspectButton").ToolTip=video ? "Open video inspection with playback, seek and volume controls" : "Open full image inspection";
             Button("PaneOpenButton").IsEnabled=Ready && focus!=null && focus.Record.Status!="EVIDENCE" && focus.Record.LocationCount>0;
             Button("PaneCaseButton").Visibility=focus!=null && focus.Record.Status=="NON_COMPLIANT" ? Visibility.Visible : Visibility.Collapsed;
             Button("PaneCaseButton").IsEnabled=Ready;
             var quick=Get<FrameworkElement>("QuickPane");quick.DataContext=display==ReviewView.Quick ? focus : null;
             quick.Visibility=display==ReviewView.Quick ? Visibility.Visible : Visibility.Collapsed;
+            if(display==ReviewView.Quick){
+                Text("QuickPositionBadge",cards.Count==0 ? "No items" : String.Format("Item {0} of {1} on page {2}/{3} · {4}",QuickPosition+1,cards.Count,page,pageCount,BucketNames[bucket]));
+            }
             UpdateQuickVideo(focus);
-            Button("QuickNonCompliantButton").IsEnabled=Button("QuickCompliantButton").IsEnabled=Ready && focus!=null && focus.CanSelect;
-            Button("QuickInspectButton").IsEnabled=Ready && focus!=null;
+            if(quickPlayer!=null)quickPlayer.SetFullScreenState(full);
+            bool hasQuickCard=Ready && focus!=null;
+            Button("QuickFullScreenButton").Content=full ? "Exit full screen" : "Full screen";
+            Button("QuickFullScreenButton").IsEnabled=full || hasQuickCard;
+            Button("QuickNonCompliantButton").IsEnabled=Button("QuickCompliantButton").IsEnabled=hasQuickCard && focus.CanSelect;
+            Button("QuickInspectButton").IsEnabled=hasQuickCard;
+            Button("QuickZoomInButton").IsEnabled=Button("QuickZoomOutButton").IsEnabled=Button("QuickZoomResetButton").IsEnabled=Button("QuickRotateLeftButton").IsEnabled=Button("QuickRotateRightButton").IsEnabled=hasQuickCard && !video;
             Button("QuickPreviousButton").IsEnabled=CanMoveQuick(-1);
             Button("QuickNextButton").IsEnabled=CanMoveQuick(1);
             Button("ListModeButton").IsEnabled=display!=ReviewView.List;
@@ -338,6 +493,7 @@ namespace MediaReviewer {
 
         void SaveWorkspace() {
             if(!persistWorkspace)return;
+            quickFullScreen.Set(false);
             Rect bounds=Window.RestoreBounds;
             if(!bounds.IsEmpty)workspace.Bounds=new[]{bounds.Left,bounds.Top,bounds.Width,bounds.Height};
             workspace.TileSize=Get<Slider>("ThumbnailSize").Value;

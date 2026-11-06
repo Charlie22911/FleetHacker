@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Executable,[string[]]$PreviewFixtures,[string]$HtmlFixture)
+param([Parameter(Mandatory)][string]$Executable,[string[]]$PreviewFixtures,[string]$HtmlFixture,[string]$PlaybackFixtures,[string]$DraftModel)
 $ErrorActionPreference = 'Stop'
 if (!(Test-Path -LiteralPath $Executable -PathType Leaf)) { throw 'The executable has not been built.' }
 $testRoot = Join-Path $PSScriptRoot ('../.build/smoke-' + [guid]::NewGuid().ToString('N'))
@@ -9,6 +9,8 @@ $temp = New-Item -ItemType Directory -Path (Join-Path $testRoot 'temp') -Force
 $scratch = New-Item -ItemType Directory -Path (Join-Path $testRoot 'data') -Force
 $copy = Join-Path $app.FullName 'Reviewer Smoke Test.exe'
 Copy-Item -LiteralPath $Executable -Destination $copy
+$modelCopy = Join-Path $app.FullName 'Marqo-NSFW-384.onnx'
+if($DraftModel){Copy-Item -LiteralPath $DraftModel -Destination $modelCopy}
 $watchers=@($app,$temp | ForEach-Object {
     $watcher=New-Object IO.FileSystemWatcher $_.FullName
     $watcher.IncludeSubdirectories=$true
@@ -36,7 +38,10 @@ function Invoke-Check([string]$Arguments) {
 }
 try {
     Invoke-Check '--verify-dependencies'
-    Invoke-Check ('--self-test "' + $scratch.FullName + '"')
+    if($DraftModel){Invoke-Check '--verify-draft-model'}
+    $selfTest='--self-test "' + $scratch.FullName + '"'
+    if($PlaybackFixtures){$selfTest+=' "' + (Resolve-Path -LiteralPath $PlaybackFixtures).Path + '"'}
+    Invoke-Check $selfTest
     Invoke-Check ('--window-smoke "' + (Join-Path $scratch.FullName 'review.sqlite') + '"')
     $cliDatabase = Join-Path $scratch.FullName 'command-line.sqlite'
     Invoke-Check ('--create-database "' + $cliDatabase + '"')
@@ -48,7 +53,9 @@ try {
         Invoke-Check ('--verify-import "' + $original + '" "' + (Join-Path $scratch.FullName 'imported.sqlite') + '"')
         if((Get-FileHash -LiteralPath $original).Hash -ne $hash){throw 'HTML import modified the original fixture.'}
     }
-    $unexpected = @(Get-ChildItem -LiteralPath $app.FullName,$temp.FullName -File -Force -Recurse | Where-Object FullName -ne $copy)
+    $allowed = @($copy)
+    if($DraftModel){$allowed += $modelCopy}
+    $unexpected = @(Get-ChildItem -LiteralPath $app.FullName,$temp.FullName -File -Force -Recurse | Where-Object { $_.FullName -notin $allowed })
     if ($unexpected.Count) { throw ('Unexpected files beside the executable or under TEMP: ' + ($unexpected.FullName -join ', ')) }
     foreach($registration in $watchers) {
         $extracted=@(Get-Event -SourceIdentifier $registration.Id -ErrorAction SilentlyContinue | ForEach-Object {$_.SourceEventArgs.FullPath} | Where-Object {$_ -match '\.(dll|exe)$'})

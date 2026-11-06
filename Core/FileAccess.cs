@@ -32,6 +32,36 @@ namespace MediaReviewer {
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(IntPtr handle,out HandleInfo data);
         [DllImport("kernel32.dll",CharSet=CharSet.Unicode,SetLastError=true)] static extern Microsoft.Win32.SafeHandles.SafeFileHandle CreateFile(string name,uint access,uint sharing,IntPtr security,uint creation,uint flags,IntPtr template);
         [DllImport("kernel32.dll",SetLastError=true)] static extern bool SetFileInformationByHandle(Microsoft.Win32.SafeHandles.SafeFileHandle file,int kind,ref int value,int bytes);
+        internal static IDisposable PinScratchDirectory(string path) {
+            var handle=CreateFile(Paths.Io(path),0x80,3,IntPtr.Zero,3,0x02200000,IntPtr.Zero);
+            try{
+                HandleInfo info;
+                if(handle.IsInvalid || !GetFileInformationByHandle(handle.DangerousGetHandle(),out info))
+                    throw Failure(Marshal.GetLastWin32Error(),"Cannot open private media directory",path);
+                if((info.Attributes&0x410)!=0x10)throw new IOException("Private media directory is not an ordinary directory.");
+                return handle;
+            }catch{handle.Dispose();throw;}
+        }
+        internal static bool DeleteScratchFile(string path,string identity) {
+            using(var handle=CreateFile(Paths.Io(path),0x10080,0,IntPtr.Zero,3,0x00200000,IntPtr.Zero)){
+                HandleInfo info;
+                if(handle.IsInvalid || !GetFileInformationByHandle(handle.DangerousGetHandle(),out info) ||
+                    (info.Attributes&0x410)!=0 || identity!=null && IdentityOf(info)!=identity)return false;
+                int remove=1;
+                return SetFileInformationByHandle(handle,4,ref remove,4);
+            }
+        }
+        internal static FileStream OpenScratchMarker(string path,bool exclusive) {
+            var handle=CreateFile(Paths.Io(path),exclusive ? 0xc0000000U : 0x80000000U,exclusive ? 0U : 3U,
+                IntPtr.Zero,3,0x00200000,IntPtr.Zero);
+            try{
+                HandleInfo info;
+                if(handle.IsInvalid || !GetFileInformationByHandle(handle.DangerousGetHandle(),out info))
+                    throw Failure(Marshal.GetLastWin32Error(),"Cannot open private media owner",path);
+                if((info.Attributes&0x410)!=0)throw new IOException("Private media owner is not an ordinary file.");
+                return new FileStream(handle,exclusive ? FileAccess.ReadWrite : FileAccess.Read);
+            }catch{handle.Dispose();throw;}
+        }
         internal static bool DeleteOwnedFile(string path,string identity){
             if(String.IsNullOrEmpty(identity))return false;
             using(var handle=CreateFile(Paths.Io(path),0x80010000,0,IntPtr.Zero,3,0x80,IntPtr.Zero)){
@@ -65,17 +95,23 @@ namespace MediaReviewer {
                 }
             } finally { FindClose(handle); }
         }
-        internal static FileStamp Stamp(FileStream stream) {
+        internal static FileStamp Stamp(FileStream stream) {return Stamp(stream.SafeFileHandle.DangerousGetHandle());}
+        internal static FileStamp Stamp(IntPtr handle) {
             HandleInfo value;
-            if(!GetFileInformationByHandle(stream.SafeFileHandle.DangerousGetHandle(),out value)) throw Failure(Marshal.GetLastWin32Error(),"Cannot read opened file metadata");
-            return new FileStamp { Size=((long)value.SizeHigh<<32)|value.SizeLow,ModifiedTicks=Ticks(value.Write),Identity=value.Volume.ToString("x8")+":"+value.IndexHigh.ToString("x8")+value.IndexLow.ToString("x8") };
+            if(!GetFileInformationByHandle(handle,out value)) throw Failure(Marshal.GetLastWin32Error(),"Cannot read opened file metadata");
+            return new FileStamp { Size=((long)value.SizeHigh<<32)|value.SizeLow,ModifiedTicks=Ticks(value.Write),Identity=IdentityOf(value) };
         }
+        static string IdentityOf(HandleInfo info){return info.Volume.ToString("x8")+":"+info.IndexHigh.ToString("x8")+info.IndexLow.ToString("x8");}
         internal static bool Transient(Exception error) {
             if(error is FileChangedException) return true;
             var sqlite=error as DatabaseException; if(sqlite!=null) return sqlite.IsTransient;
             if(error is UnauthorizedAccessException || error is InvalidDataException || error is FileNotFoundException || error is DirectoryNotFoundException) return false;
             var win32=error as Win32Exception; int code=win32==null ? (error.HResult&65535) : win32.NativeErrorCode;
             return code==32 || code==33 || code==53 || code==59 || code==64 || code==67 || code==121 || code==1231 || code==1232;
+        }
+        internal static bool IsSourceFailure(Exception error) {
+            return !(error is DatabaseException) && (error is IOException || error is InvalidDataException ||
+                error is UnauthorizedAccessException || error is Win32Exception);
         }
         internal static FileRecord Fingerprint(string path,FileRecord record,byte[] buffer,CancellationToken token,Action<int> progress,long cutoff,FingerprintPolicy policy=null) {
             if(Archives.IsPath(path))return Archives.Fingerprint(path,record,buffer,token,progress,cutoff,null);

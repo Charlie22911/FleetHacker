@@ -140,7 +140,7 @@ namespace MediaReviewer {
         }
         void VerificationRetry(Action body,string path,CancellationToken token){
             for(int attempt=0;;attempt++){token.ThrowIfCancellationRequested();try{body();return;}catch(Exception error){
-                if(error is OperationCanceledException || !FileAccessNative.Transient(error) || attempt>=3)throw;
+                if(error is OperationCanceledException || !FileAccessNative.Transient(error is RetentionSourceException ? error.InnerException : error) || attempt>=3)throw;
                 WaitWrite(w=>{Catalog.Log(w,"retry","Verification source",path,"Retry "+(attempt+1)+" of 3: "+error.Message);return null;});
                 if(token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))token.ThrowIfCancellationRequested();
             }}

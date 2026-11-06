@@ -21,12 +21,25 @@ namespace MediaReviewer {
             string actual=dot<0 ? "" : name.Substring(dot+1).ToUpperInvariant();
             return detected.Length!=0 && actual!=detected ? detected+" (detected)" : detected;
         }}
+        public bool IsRenamed {get{
+            string detected=(Record.Extension??"").ToUpperInvariant();
+            string name=Record.Name??"";int dot=name.LastIndexOf('.');
+            string actual=dot<0 ? "" : name.Substring(dot+1).ToUpperInvariant();
+            return detected.Length!=0 && actual!=detected;
+        }}
+        public Visibility RenamedBadgeVisibility {get{return IsRenamed ? Visibility.Visible : Visibility.Collapsed;}}
+        public Visibility MultiLocationBadgeVisibility {get{return Record.LocationCount>1 ? Visibility.Visible : Visibility.Collapsed;}}
+        public string LocationBadgeText {get{return Record.LocationCount.ToString("N0")+" copies";}}
+        public Visibility NotesBadgeVisibility {get{return !String.IsNullOrWhiteSpace(Record.Notes) ? Visibility.Visible : Visibility.Collapsed;}}
+        public string NotesPreview {get{return String.IsNullOrWhiteSpace(Record.Notes) ? "" : "Note: "+Record.Notes.Replace((char)13,' ').Replace((char)10,' ');}}
+        public string HashBadge {get{return Record.Algorithm=="sha256" ? "SHA-256" : "Candidate";}}
+        public string DimensionsLabel {get{return Record.PreviewWidth>0 && Record.PreviewHeight>0 ? Record.PreviewWidth+"×"+Record.PreviewHeight : "";}}
         public string SizeLabel {get{return Record.Status=="EVIDENCE" ? "" : (Record.Size/1024.0).ToString("N1")+" KiB";}}
         public string ModifiedLabel {get{return Record.ModifiedTicks>0 && Record.ModifiedTicks<=DateTime.MaxValue.Ticks ? new DateTime(Record.ModifiedTicks,DateTimeKind.Utc).ToLocalTime().ToString("g") : "";}}
         public string ReviewerLabel {get{return Record.Reviewer??"";}}
         public string FullPath { get { return Record.SourcePath; } }
         public string Info { get { return Record.Status=="EVIDENCE" ? "Password-protected original" : Record.OriginalRetained && Record.LocationCount==0 ? "Stored original - no source location" : (Record.OriginalRetained ? "Original retained | " : "")+Record.LocationCount+" location"+(Record.LocationCount==1 ? "" : "s")+" · "+Record.Extension.ToUpperInvariant()+" · "+(Record.Size/1024.0).ToString("0.#",CultureInfo.CurrentCulture)+" KiB"+(Record.SourceIsHistorical ? " · Historical location" : ""); } }
-        public string FingerprintLabel { get { return Record.Algorithm=="sha256" ? "Full SHA-256" : "Quick candidate match"; } }
+        public string FingerprintLabel { get { return (Record.Algorithm=="sha256" ? "Full SHA-256" : "Quick candidate match")+(Record.AiScore.HasValue ? (Record.AiGemma ? " · Gemma priority " : " · Marqo score ")+Record.AiScore.Value.ToString("P0") : ""); } }
         public string PreviewRetryLabel {get{return String.IsNullOrEmpty(Record.PreviewRetryState) ? "" : "Preview retry: "+Record.PreviewRetryState;}}
         public string Placeholder { get { return imageError ?? (Record.PreviewState=="unavailable" || Record.PreviewState=="protected" ? (String.IsNullOrEmpty(Record.PreviewError) ? "Preview unavailable" : Record.PreviewError) : Record.PreviewBytes==null && Record.PreviewState!="available" ? "Preview pending" : "Loading preview"); } }
         public BitmapSource Image { get { return image; } }
@@ -36,9 +49,12 @@ namespace MediaReviewer {
         public bool CanSelect { get { return !pending; } }
         public bool CanLoadImage { get { return image==null && imageError==null && !ImageQueued && Record.PreviewBytes!=null; } }
         public void SetImage(BitmapSource source,string error) { image=source; imageError=error; ImageQueued=false; Changed("Image");Changed("Placeholder");Changed("PlaceholderVisibility"); }
-        public void Update(MediaRow record) { bool changed=Record.ContentId!=record.ContentId || Record.PreviewRevision!=record.PreviewRevision;Record=record;
+        public void Update(MediaRow record) {
+            bool changed=Record.ContentId!=record.ContentId || Record.PreviewRevision!=record.PreviewRevision;
+            if(!changed && record.PreviewBytes==null)record.PreviewBytes=Record.PreviewBytes;
+            Record=record;
             if(changed){image=null;imageError=null;ImageQueued=false;Changed("Image");Changed("PlaceholderVisibility");}
-            if(image!=null) Record.PreviewBytes=null; Changed("Name");Changed("PathLabel");Changed("FullPath");Changed("Info");Changed("FingerprintLabel");Changed("Placeholder");Changed("PreviewRetryLabel");Changed("FolderLabel");Changed("TypeLabel");Changed("SizeLabel");Changed("ModifiedLabel");Changed("ReviewerLabel"); }
+            if(image!=null) Record.PreviewBytes=null; Changed("Name");Changed("PathLabel");Changed("FullPath");Changed("Info");Changed("FingerprintLabel");Changed("Placeholder");Changed("PreviewRetryLabel");Changed("FolderLabel");Changed("TypeLabel");Changed("SizeLabel");Changed("ModifiedLabel");Changed("ReviewerLabel");Changed("IsRenamed");Changed("RenamedBadgeVisibility");Changed("MultiLocationBadgeVisibility");Changed("LocationBadgeText");Changed("NotesBadgeVisibility");Changed("NotesPreview");Changed("HashBadge");Changed("DimensionsLabel"); }
         public event PropertyChangedEventHandler PropertyChanged;
         void Changed(string name) { var handler=PropertyChanged; if(handler!=null) handler(this,new PropertyChangedEventArgs(name)); }
     }
@@ -57,9 +73,13 @@ namespace MediaReviewer {
         public MediaLoader() { thumbnailThread=new Thread(Thumbnails) { IsBackground=true,Name="MediaReviewer saved thumbnail loader" }; inspectThread=new Thread(Inspect) { IsBackground=true,Name="MediaReviewer source inspector" }; thumbnailThread.Start(); inspectThread.Start(); }
         public bool QueueThumbnail(long id,long generation,byte[] bytes){return QueueThumbnail(id,0,generation,bytes);}
         public bool QueueThumbnail(long id,long content,long generation,byte[] bytes,long previewRevision=0) { if(closing) return false; if(bytes==null || bytes.Length>32768) throw new InvalidDataException("Saved thumbnail exceeds its bounded encoded size"); return thumbnails.TryAdd(new ThumbnailWork { Id=id,Content=content,Generation=generation,Bytes=bytes,PreviewRevision=previewRevision },bytes.Length+128); }
-        public bool QueueInspect(MediaRow row,long generation,int side) {
-            if(row==null || row.RootPath==null || row.RelativePath==null || row.RootPath.Length+row.RelativePath.Length>65536 || side<1 || side>InspectionPlan.MaxSide)throw new ArgumentException("Invalid bounded inspection request");
-            var snapshot=new MediaRow {GroupId=row.GroupId,ContentId=row.ContentId,RootPath=row.RootPath,RelativePath=row.RelativePath,Size=row.Size,ModifiedTicks=row.ModifiedTicks,FileIdentity=row.FileIdentity};
+        public bool QueueInspect(MediaRow row,long generation,int side,bool useSavedPoster=false) {
+            if(row==null || side<1 || side>InspectionPlan.MaxSide)throw new ArgumentException("Invalid bounded inspection request");
+            byte[] saved=useSavedPoster ? row.PreviewBytes : null;
+            if(saved!=null && saved.Length>32768 || saved==null &&
+                (row.RootPath==null || row.RelativePath==null || row.RootPath.Length+row.RelativePath.Length>65536))
+                throw new ArgumentException("Invalid bounded inspection request");
+            var snapshot=new MediaRow {GroupId=row.GroupId,ContentId=row.ContentId,RootPath=row.RootPath,RelativePath=row.RelativePath,Size=row.Size,ModifiedTicks=row.ModifiedTicks,FileIdentity=row.FileIdentity,PreviewBytes=saved};
             lock(inspectGate){if(closing)return false;latestInspect=generation;pendingInspect=new InspectWork {Row=snapshot,Generation=generation,Side=side};inspectResult=null;if(activeInspect!=null)activeInspect.Cancel();Monitor.PulseAll(inspectGate);return true;}
         }
         public void CancelInspect(long generation){lock(inspectGate){latestInspect=generation;pendingInspect=null;inspectResult=null;if(activeInspect!=null)activeInspect.Cancel();Monitor.PulseAll(inspectGate);}}
@@ -86,7 +106,11 @@ namespace MediaReviewer {
             while(!stop.IsCancellationRequested){InspectWork work;CancellationTokenSource request;
                 lock(inspectGate){if(pendingInspect==null && !closing)Monitor.Wait(inspectGate,100);if(closing)break;work=pendingInspect;pendingInspect=null;if(work==null)continue;request=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);activeInspect=request;}
                 var result=new MediaLoadResult {Kind="Inspect",GroupId=work.Row.GroupId,ContentId=work.Row.ContentId,Generation=work.Generation,RequestedSide=work.Side};
-                try{for(int attempt=0;;attempt++){try{var preview=Preview.CreateExpectedScoped(Catalog.PreviewSourcePath(work.Row.RootPath,work.Row.RelativePath),work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,work.Side,InspectionPlan.EncodedLimit,request.Token,work.Row.RootPath);request.Token.ThrowIfCancellationRequested();result.Image=Decode(preview.Bytes,work.Side);result.SourceWidth=preview.SourceWidth;result.SourceHeight=preview.SourceHeight;break;}catch(Exception error){if(!FileAccessNative.Transient(error) || attempt>=3)throw;if(request.Token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))request.Token.ThrowIfCancellationRequested();}}}
+                try{
+                    if(work.Row.PreviewBytes!=null){
+                        result.Image=Decode(work.Row.PreviewBytes,256,request.Token);
+                        result.SourceWidth=result.Image.PixelWidth;result.SourceHeight=result.Image.PixelHeight;
+                    }else for(int attempt=0;;attempt++){try{var preview=Preview.CreateExpectedScoped(Catalog.PreviewSourcePath(work.Row.RootPath,work.Row.RelativePath),work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,work.Side,InspectionPlan.EncodedLimit,request.Token,work.Row.RootPath);request.Token.ThrowIfCancellationRequested();result.Image=Decode(preview.Bytes,work.Side);result.SourceWidth=preview.SourceWidth;result.SourceHeight=preview.SourceHeight;break;}catch(Exception error){if(!FileAccessNative.Transient(error) || attempt>=3)throw;if(request.Token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))request.Token.ThrowIfCancellationRequested();}}}
                 catch(OperationCanceledException){}catch(Exception error){result.Error=error.Message;}
                 finally{lock(inspectGate){if(!closing && !request.IsCancellationRequested && work.Generation==latestInspect)inspectResult=result;activeInspect=null;request.Dispose();}}
             }

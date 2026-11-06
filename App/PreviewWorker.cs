@@ -15,7 +15,11 @@ static class DecoderProgram {
                 else if(kind==1){int length=input.ReadInt32();if(length<20 || length>32768)throw new InvalidDataException("Saved WebP request exceeds its input limit");saved=input.ReadBytes(length);if(saved.Length!=length)throw new EndOfStreamException();}
                 else throw new InvalidDataException("Unknown private decoder request kind");
                 PreviewResult image=null;
-                try{image=kind==1 ? MediaDecode.CreateSavedWebp(saved) : MediaDecode.CreateScoped(path,size,ticks,identity,side,limit,root);byte[] decoder=Encoding.UTF8.GetBytes(image.Decoder);if(decoder.Length>2048)throw new InvalidDataException("Decoder label exceeds its byte limit");output.Write(0);output.Write(image.Width);output.Write(image.Height);output.Write(image.SourceWidth);output.Write(image.SourceHeight);output.Write(image.Bytes.Length);output.Write(image.Bytes);output.Write(decoder.Length);output.Write(decoder);}
+                try{
+                    using(kind==0 ? MediaScratch.ArchiveLease(path) : null)
+                        image=kind==1 ? MediaDecode.CreateSavedWebp(saved) : MediaDecode.CreateScoped(path,size,ticks,identity,side,limit,root);
+                    byte[] decoder=Encoding.UTF8.GetBytes(image.Decoder);if(decoder.Length>2048)throw new InvalidDataException("Decoder label exceeds its byte limit");output.Write(0);output.Write(image.Width);output.Write(image.Height);output.Write(image.SourceWidth);output.Write(image.SourceHeight);output.Write(image.Bytes.Length);output.Write(image.Bytes);output.Write(decoder.Length);output.Write(decoder);
+                }
                 catch(Exception error){var origin=error.GetBaseException();var native=origin as System.ComponentModel.Win32Exception;int code=native==null ? origin.HResult&65535 : native.NativeErrorCode;byte[] message=Encoding.UTF8.GetBytes(error.ToString());if(message.Length>16384)Array.Resize(ref message,16384);output.Write(1);output.Write(code);output.Write(message.Length);output.Write(message);}
                 finally{if(saved!=null){Array.Clear(saved,0,saved.Length);if(image!=null && image.Bytes!=null)Array.Clear(image.Bytes,0,image.Bytes.Length);}}
                 output.Flush();
