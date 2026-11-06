@@ -6,7 +6,14 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
-Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the catalog and manual review tools. The optional AI draft check reads separate model weights. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
+Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the catalog and manual review tools. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
+
+## Download Gemma for advanced AI review
+
+**Advanced AI review with Gemma 4 E2B requires both files below.** Download them separately and place them in the same folder as the FleetHacker executable on a local drive. Keep the original filenames. The pair is about 3.4 GB and FleetHacker checks both files when it loads the model.
+
+- [Download `gemma-4-E2B-it-Q4_0.gguf` (language model, 2.84 GB)](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/6938c58e698502037401a5f19f6905f2fb2f7dee/gemma-4-E2B-it-Q4_0.gguf?download=true)
+- [Download `mmproj-gemma-4-E2B-it-Q8_0.gguf` (vision projector, 557 MB)](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/resolve/6938c58e698502037401a5f19f6905f2fb2f7dee/mmproj-gemma-4-E2B-it-Q8_0.gguf?download=true)
 
 ## Open a catalog and scan
 
@@ -44,7 +51,7 @@ This is an unsigned development preview. Use a copy of an existing catalog for e
 
 ## AI draft check
 
-1. Place `Marqo-NSFW-384.onnx` beside the executable on a local fixed drive. To enable **Gemma 4 E2B**, also place `gemma-4-E2B-it-Q4_0.gguf` and `mmproj-gemma-4-E2B-it-Q8_0.gguf` in that folder. Use the exact files listed in Google’s llama.cpp guide. The pair is about 3.4 GB and is checked for integrity on load. Gemma requires a CPU with AVX2, FMA and F16C and uses more time and memory than Marqo. [Google’s Gemma llama.cpp guide](https://github.com/google-gemma/docs/blob/main/docs/deployment/llamacpp.md), [Gemma weight files](https://huggingface.co/ggml-org/gemma-4-E2B-it-GGUF/tree/main)
+1. For advanced review, [download both Gemma files](#download-gemma-for-advanced-ai-review). Gemma requires a CPU with AVX2, FMA and F16C and uses more time and memory than Marqo. For Marqo, place `Marqo-NSFW-384.onnx` beside the executable on a local fixed drive.
 2. Finish or pause your scan, then choose **AI draft check**. Select a model and threshold and choose **Save and run**. **Save settings** updates the queue from scores already saved. Each model has its own scores and threshold. The catalog remembers your selection, with Marqo as the default when the Gemma pair is unavailable.
 3. Open **AI suggestions** to inspect flagged items, with the highest scores first by default. Use the usual Compliant or Non-compliant controls to make a decision. A saved decision clears the suggestion. The regular **To be reviewed** queue includes all items awaiting a human decision.
 
