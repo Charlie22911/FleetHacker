@@ -1,1 +1,2 @@
 native/*.sh text eol=lf
+browser/** -text

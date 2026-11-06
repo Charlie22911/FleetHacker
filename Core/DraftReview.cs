@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
+using System.ComponentModel;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -23,7 +25,9 @@ namespace MediaReviewer {
         static string CurrentScore(string model){return "a.preview_revision=ap.revision AND ap.state='available' AND a.model='"+model+"'";}
         internal static string ScoreSql(string model){return "(SELECT a.score FROM ai_draft_scores a JOIN previews ap ON ap.content_id=a.content_id WHERE "+CurrentScore(model)+" AND a.content_id=g.content_id)";}
         internal static string SuggestionFilter(bool gemma,string model){return ScoreSql(model)+">="+ThresholdSql(gemma)+"/100.0";}
-        static readonly string ImageExtensions=String.Join(",",Formats.Deep.Where(x=>!Formats.IsPlayable(x)).Select(x=>"'"+x+"'"));
+        static readonly string ReviewExtensions=ExtensionList(Formats.Deep);
+        static readonly string MotionExtensions=ExtensionList(Formats.Deep.Where(Formats.IsPlayable));
+        static string ExtensionList(IEnumerable<string> extensions){return String.Join(",",extensions.Select(x=>"'"+x+"'"));}
         const int BatchSize=16;
 
         internal static bool PrefersGemma(SqliteConnection db){return (string)db.Scalar("SELECT value FROM settings WHERE key=?",ModelKey)==Gemma;}
@@ -58,33 +62,75 @@ namespace MediaReviewer {
         internal static string Run(ReviewerEngine engine,SqliteConnection reader,IDraftClassifier classifier,bool gemma,string criteria,CancellationToken token,Action<long,long,string> progress){
             string model=gemma ? GemmaCriteria.Model(criteria) : Model;
             int batchSize=gemma ? 1 : BatchSize;
-            long ceiling=(long)reader.Scalar("SELECT COALESCE(MAX(content_id),0) FROM previews"),cursor=0,examined=0,scored=0,skipped=0;
+            long ceiling=(long)reader.Scalar("SELECT COALESCE(MAX(content_id),0) FROM previews"),cursor=0,examined=0,scored=0,skipped=0,motionSkipped=0;
             string eligible=@"p.content_id>? AND p.content_id<=? AND p.state='available' AND length(p.bytes) BETWEEN 1 AND 32768
                 AND NOT EXISTS(SELECT 1 FROM ai_draft_scores a WHERE a.content_id=p.content_id AND a.preview_revision=p.revision AND a.model=?)
                 AND EXISTS(SELECT 1 FROM review_groups g WHERE g.content_id=p.content_id AND g.retired=0 AND g.status='TO_REVIEW'
-                    AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+ImageExtensions+") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))))";
-            progress(0,-1,"previews examined");
-            while(true){
-                token.ThrowIfCancellationRequested();
-                var rows=reader.Query("SELECT p.content_id,p.revision,p.bytes FROM previews p WHERE "+eligible+" ORDER BY p.content_id LIMIT "+batchSize,
-                    new object[]{cursor,ceiling,model},batchSize);
-                if(rows.Count==0)break;
-                var batch=new List<ScoreRecord>(batchSize);
-                try{
-                    foreach(var row in rows){
-                        token.ThrowIfCancellationRequested();cursor=(long)row[0];
-                        double? score=classifier.Score((byte[])row[2],token);
-                        progress(++examined,-1,"previews examined"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : ""));
-                        if(!score.HasValue){skipped++;continue;}
-                        if(Double.IsNaN(score.Value) || score.Value<0 || score.Value>1)throw new InvalidOperationException("The AI worker returned an invalid score.");
-                        batch.Add(new ScoreRecord {Content=cursor,Revision=(long)row[1],Score=score.Value});
+                    AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+ReviewExtensions+@") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))))";
+            string motionGroup=@"(SELECT MIN(g.id) FROM review_groups g WHERE g.content_id=p.content_id AND g.retired=0 AND g.status='TO_REVIEW'
+                AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+MotionExtensions+@") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))))";
+            progress(0,-1,"items examined");
+            using(var decoder=new DecoderHost(Native.RuntimeDirectory)){
+                while(true){
+                    token.ThrowIfCancellationRequested();
+                    var rows=reader.Query("SELECT p.content_id,p.revision,p.bytes,"+motionGroup+" FROM previews p WHERE "+eligible+" ORDER BY p.content_id LIMIT "+batchSize,
+                        new object[]{cursor,ceiling,model},batchSize);
+                    if(rows.Count==0)break;
+                    var batch=new List<ScoreRecord>(batchSize);
+                    try{
+                        foreach(var row in rows){
+                            token.ThrowIfCancellationRequested();cursor=(long)row[0];
+                            bool motion=row[3]!=null;
+                            if(motion)progress(examined,-1,"items examined · sampling motion frames");
+                            double? score=motion ? ScoreMotion(reader,decoder,classifier,(long)row[3],cursor,token) : ScoreFrame(classifier,(byte[])row[2],token);
+                            progress(++examined,-1,"items examined"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : ""));
+                            if(!score.HasValue){if(motion)motionSkipped++;else skipped++;continue;}
+                            batch.Add(new ScoreRecord {Content=cursor,Revision=(long)row[1],Score=score.Value});
+                        }
+                    }finally{
+                        foreach(var row in rows){var bytes=(byte[])row[2];Array.Clear(bytes,0,bytes.Length);}
+                        if(batch.Count!=0)scored+=(int)engine.WaitWrite(db=>Store(db,batch,model));
                     }
-                }finally{
-                    foreach(var row in rows){var bytes=(byte[])row[2];Array.Clear(bytes,0,bytes.Length);}
-                    if(batch.Count!=0)scored+=(int)engine.WaitWrite(db=>Store(db,batch,model));
                 }
             }
-            return "AI draft check complete"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : "")+". "+scored.ToString("N0")+" new scores saved, "+skipped.ToString("N0")+" unreadable previews skipped. Open AI suggestions to review the flagged items.";
+            return "AI draft check complete"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : "")+
+                ". "+scored.ToString("N0")+" new scores saved, "+skipped.ToString("N0")+" unreadable still previews and "+
+                motionSkipped.ToString("N0")+" unavailable or unreadable motion items skipped. Open AI suggestions to review the flagged items.";
+        }
+
+        static double? ScoreFrame(IDraftClassifier classifier,byte[] bytes,CancellationToken token){
+            token.ThrowIfCancellationRequested();
+            double? score=classifier.Score(bytes,token);
+            if(score.HasValue && (Double.IsNaN(score.Value) || score.Value<0 || score.Value>1))
+                throw new InvalidOperationException("The AI worker returned an invalid score.");
+            return score;
+        }
+
+        static double? ScoreMotion(SqliteConnection reader,DecoderHost decoder,IDraftClassifier classifier,long group,long content,CancellationToken token){
+            foreach(var source in Catalog.RecordedSources(reader,group,content,false,token).Take(3)){
+                string root=(string)source[0],relative=(string)source[1],identity=(string)source[4];
+                if(String.IsNullOrEmpty(identity))continue;
+                PreviewResult[] frames;
+                try{
+                    string path=Catalog.PreviewSourcePath(root,relative);
+                    long size=(long)source[2],ticks=(long)source[3];
+                    frames=Archives.IsPath(path) ? Archives.WithPreviewFile(path,size,ticks,identity,token,root,
+                        (file,stamp)=>decoder.CreateMotion(file,stamp.Size,stamp.ModifiedTicks,stamp.Identity,token,Native.RuntimeDirectory)) :
+                        decoder.CreateMotion(path,size,ticks,identity,token,root);
+                }catch(InvalidDataException){continue;}
+                catch(IOException){continue;}
+                catch(Win32Exception){continue;}
+                catch(UnauthorizedAccessException){continue;}
+                try{
+                    double? highest=null;
+                    foreach(var frame in frames){
+                        var score=ScoreFrame(classifier,frame.Bytes,token);
+                        if(score.HasValue && (!highest.HasValue || score.Value>highest.Value))highest=score;
+                    }
+                    return highest;
+                }finally{foreach(var frame in frames)Array.Clear(frame.Bytes,0,frame.Bytes.Length);}
+            }
+            return null;
         }
 
         static int Store(SqliteConnection db,List<ScoreRecord> batch,string model){
@@ -160,7 +206,7 @@ namespace MediaReviewer {
                         }
                         GemmaSession session;
                         lock(scanGate)session=OpenGemmaSession(cpuOnly,criteria,true);
-                        if(!session.Ready)progress(0,-1,"previews examined · waiting for Gemma to load");
+                        if(!session.Ready)progress(0,-1,"items examined · waiting for Gemma to load");
                         var worker=session.Wait(token);
                         try{return DraftReview.Run(this,db,worker,true,criteria,token,progress);}
                         catch{lock(scanGate)RetireGemma();throw;}

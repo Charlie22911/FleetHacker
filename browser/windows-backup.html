@@ -1,0 +1,26 @@
+<dialog id="windows-catalog-dialog" class="info-dialog" aria-labelledby="windows-catalog-title">
+  <div class="modal-head">
+    <h2 id="windows-catalog-title">Windows catalog backup</h2>
+    <form method="dialog"><button class="icon quiet" aria-label="Close Windows backup">×</button></form>
+  </div>
+  <div class="modal-body">
+    <p>In the Windows reviewer, choose <strong>Maintenance → Portable backup</strong>. Select that backup here to view ordinary review records and saved previews.</p>
+    <label for="windows-backup-file">Portable backup</label>
+    <input id="windows-backup-file" type="file" accept=".sqlite,.sqlite3,.db">
+    <p id="windows-backup-status" class="statusline" role="status"></p>
+    <section id="windows-backup-results" hidden aria-label="Backup results">
+      <div class="windows-backup-toolbar">
+        <label for="windows-backup-bucket">View</label>
+        <select id="windows-backup-bucket">
+          <option value="TO_REVIEW">To be reviewed</option>
+          <option value="COMPLIANT">Compliant</option>
+          <option value="NON_COMPLIANT">Non-compliant</option>
+        </select>
+        <button id="windows-backup-prev" type="button">Previous</button>
+        <button id="windows-backup-next" type="button">Next</button>
+        <span id="windows-backup-page"></span>
+      </div>
+      <ul id="windows-backup-cards"></ul>
+    </section>
+  </div>
+</dialog>

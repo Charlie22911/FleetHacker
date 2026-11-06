@@ -1,0 +1,192 @@
+// Optional packaged-browser regression check; requires Node.js 24 and Chromium.
+const fs=require('fs'),path=require('path'),{spawn}=require('child_process'),{pathToFileURL}=require('url'),assert=require('assert/strict');
+const root=path.join(__dirname,'..'),output=path.join(root,'.build');fs.mkdirSync(output,{recursive:true});
+const profile=path.join(output,'browser-smoke-'+Date.now());
+const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+let chrome,socket,sequence=0,stderr='',currentView;const pending=new Map(),contexts=new Map(),parents=new Map(),errors=[];
+async function waitFor(check,label,timeout=20000){const end=Date.now()+timeout;while(Date.now()<end){const value=await check();if(value)return value;await delay(100);}throw Error('Timed out: '+label+'; errors: '+JSON.stringify(errors));}
+function call(method,params={},sessionId){return new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});socket.send(JSON.stringify({id,method,params,...(sessionId?{sessionId}:{})}));});}
+async function evaluate(sessionId,contextId,expression){const result=await call('Runtime.evaluate',{contextId,expression,returnByValue:true,awaitPromise:true},sessionId);if(result.exceptionDetails)throw Error(result.exceptionDetails.exception?.description||result.exceptionDetails.text);return result.result.value;}
+const filePickerShim=`(()=>{let bytes=new Uint8Array(),modified=Date.now();window.confirm=()=>true;window.__testFileSize=()=>bytes.byteLength;const handle={kind:'file',name:'startup-test.sqlite',queryPermission:async()=> 'granted',requestPermission:async()=> 'granted',getFile:async()=>{if(window.__testNextFileRead){const paused=window.__testNextFileRead;window.__testNextFileRead=null;await paused;}return new File([bytes],'startup-test.sqlite',{lastModified:modified});},createWritable:async()=>{const parts=[];return{write:async data=>{if(window.__testFileWriteGate){window.__testFileWriteWaiting=true;await window.__testFileWriteGate;}parts.push(new Uint8Array(data));},close:async()=>{const size=parts.reduce((n,p)=>n+p.byteLength,0);bytes=new Uint8Array(size);let at=0;for(const part of parts){bytes.set(part,at);at+=part.byteLength;}modified=Date.now();},abort:async()=>{}};}};window.showSaveFilePicker=async()=>{if(window.__testCancelSave){window.__testCancelSave=false;throw new DOMException('Picker cancelled','AbortError');}return handle;};window.showOpenFilePicker=async()=>[handle];})();`;
+const scanFolderShim=`(async()=>{
+ const modified=1700000000000;
+ async function png(name,color){const canvas=document.createElement('canvas');canvas.width=12;canvas.height=20;const paint=canvas.getContext('2d');paint.fillStyle=color;paint.fillRect(0,0,12,20);const blob=await new Promise(resolve=>canvas.toBlob(resolve,'image/png'));return new File([blob],name,{type:'image/png',lastModified:modified});}
+ const first=await png('first.png','red'),second=await png('second.png','blue'),third=await png('third.png','green');
+ const original='C:'+String.fromCharCode(92)+'Pictures'+String.fromCharCode(92)+'first.png'+String.fromCharCode(0),metadata=new Uint8Array(28+original.length*2),view=new DataView(metadata.buffer);view.setBigUint64(0,2n,true);view.setUint32(24,original.length,true);for(let at=0;at<original.length;at++)view.setUint16(28+at*2,original.charCodeAt(at),true);
+ const file=value=>({kind:'file',name:value.name,getFile:async()=>value,isSameEntry:async other=>other===value,queryPermission:async()=> 'granted',requestPermission:async()=> 'granted'});
+ const directory=(name,children)=>({kind:'directory',name,queryPermission:async()=> 'granted',requestPermission:async()=> 'granted',isSameEntry:async other=>other?.name===name,async *entries(){for(const child of children)yield[child.name,child];},async *values(){for(const child of children)yield child;},async getDirectoryHandle(name){const child=children.find(child=>child.name===name&&child.kind==='directory');if(!child)throw new DOMException('Missing directory','NotFoundError');return child;},async getFileHandle(name){const child=children.find(child=>child.name===name&&child.kind==='file');if(!child)throw new DOMException('Missing file','NotFoundError');return child;}});
+ const root=directory('HomeShare',[directory('bravo.last',[directory('$RECYCLE.BIN',[file(new File([first],'$RABC123.PNG',{type:'image/png',lastModified:modified}))]),file(third)]),directory('alpha.first',[file(first),file(second),file(new File(['skip'],'ignored.txt',{lastModified:modified})),directory('$RECYCLE.BIN',[file(new File([metadata],'$IABC123.PNG',{lastModified:modified}))]),directory('Application Data',[file(await png('excluded.png','black'))])])]);window.showDirectoryPicker=async()=>root;
+})();`;
+const slowStartupShim=`(()=>{const NativeWorker=window.Worker;window.__testWorkers=[];window.__testDelayedOpen=false;window.Worker=class extends NativeWorker{constructor(...args){super(...args);window.__testWorkers.push(this);}postMessage(message,...rest){if(message.method==='open'&&!window.__testDelayedOpen){window.__testDelayedOpen=true;setTimeout(()=>super.postMessage(message,...rest),1000);}else super.postMessage(message,...rest);}};})();`;
+const cleanupStartupShim=`(()=>{
+ if(parent!==window)return;
+ const databaseName='photo-audit-sqlite-pages-v1';
+ const abandoned='/snapshot-smoke-abandoned.sqlite',active='/work-smoke-active.sqlite',recovery='/work-smoke-recovery.sqlite';
+ navigator.locks.request('photo-audit-database-storage-maintenance',async()=>{window.__testMaintenanceLocked=true;await new Promise(resolve=>window.__testReleaseMaintenance=resolve);});
+ navigator.locks.request('photo-audit-database-session:smoke-active',async()=>{await new Promise(resolve=>window.__testReleaseActiveSession=resolve);});
+ const opened=indexedDB.open(databaseName,6);
+ opened.onupgradeneeded=()=>{const db=opened.result;if(!db.objectStoreNames.contains('metadata'))db.createObjectStore('metadata',{keyPath:'name'});if(!db.objectStoreNames.contains('blocks'))db.createObjectStore('blocks',{keyPath:['path','offset','version']});};
+ opened.onsuccess=()=>{const db=opened.result,tx=db.transaction(['metadata','blocks'],'readwrite'),metadata=tx.objectStore('metadata'),blocks=tx.objectStore('blocks');
+  for(const [path,owner,pages]of [[abandoned,'smoke-closed',512],[active,'smoke-active',1],[recovery,'smoke-closed',1],[recovery+'-journal','smoke-closed',1]]){
+   metadata.put({name:path,fileSize:pages*4096,version:0,_mediaSession:owner});for(let at=0;at<pages;at++)blocks.put({path,offset:-at*4096,version:0,data:new Uint8Array(4096)});
+  }
+  metadata.put({name:'/recovery-pointer',workingPath:recovery,updatedAt:Date.now()});
+  tx.oncomplete=()=>{db.close();window.__testCleanupSeeded=true;};tx.onerror=()=>{throw tx.error;};
+ };
+ const read=request=>new Promise((resolve,reject)=>{request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);});
+ window.__testCleanupInfo=async()=>{const db=await read(indexedDB.open(databaseName)),tx=db.transaction(['metadata','blocks']),store=tx.objectStore('metadata');
+  const result=await Promise.all([store.get(abandoned),store.get(active),store.get(recovery),store.get(recovery+'-journal'),tx.objectStore('blocks').count(IDBKeyRange.bound([recovery,-Infinity],[recovery,Infinity]))].map(read));db.close();return{abandoned:!!result[0],active:!!result[1],recovery:!!result[2],journal:!!result[3],recoveryBlocks:result[4]};};
+ window.__testClearFakeRecovery=async()=>{const db=await read(indexedDB.open(databaseName)),tx=db.transaction('metadata','readwrite');tx.objectStore('metadata').delete('/recovery-pointer');await new Promise((resolve,reject)=>{tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});db.close();};
+})();`;
+const failedStartupShim=`(()=>{const NativeWorker=window.Worker;let failed=false;window.Worker=class extends NativeWorker{postMessage(message,...rest){if(message.method==='open'&&!failed){failed=true;setTimeout(()=>this.onerror({message:'Simulated startup worker failure'}),0);}else super.postMessage(message,...rest);}};})();`;
+async function findAppView(rootSession,expression,label){return waitFor(async()=>{for(const[viewSession,list]of contexts){let ancestor=viewSession;while(parents.has(ancestor))ancestor=parents.get(ancestor);if(ancestor!==rootSession)continue;for(const context of list){if(!context.auxData?.isDefault)continue;try{if(await evaluate(viewSession,context.id,"typeof MediaDatabase!=='undefined'&&("+expression+")"))return{session:viewSession,id:context.id};}catch(error){if(!/context|navigat|Session with given id not found/i.test(error.message))throw error;}}}},label);}
+(async()=>{
+ chrome=spawn(process.env.MEDIA_REVIEWER_TEST_BROWSER||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:['ignore','ignore','pipe']});
+ chrome.stderr.on('data',chunk=>stderr+=chunk);chrome.on('error',error=>errors.push(String(error)));
+ const portFile=path.join(profile,'DevToolsActivePort');await waitFor(()=>fs.existsSync(portFile),'browser launch',15000);const [port,endpoint]=fs.readFileSync(portFile,'utf8').trim().split(/\r?\n/);
+ socket=new WebSocket('ws://127.0.0.1:'+port+endpoint);await new Promise((resolve,reject)=>{socket.onopen=resolve;socket.onerror=reject;});
+ socket.onmessage=event=>{const message=JSON.parse(event.data);if(message.id){const slot=pending.get(message.id);if(slot){pending.delete(message.id);message.error?slot.reject(Error(message.error.message)):slot.resolve(message.result);}return;}
+  if(message.method==='Runtime.executionContextCreated'){const list=contexts.get(message.sessionId)||[];list.push(message.params.context);contexts.set(message.sessionId,list);}
+  if(message.method==='Runtime.executionContextsCleared')contexts.set(message.sessionId,[]);
+  if(message.method==='Target.detachedFromTarget'){contexts.delete(message.params.sessionId);parents.delete(message.params.sessionId);}
+  if(message.method==='Target.attachedToTarget'&&message.params.targetInfo.type==='iframe'){const childSession=message.params.sessionId;parents.set(childSession,message.sessionId);call('Runtime.enable',{},childSession).catch(error=>errors.push(String(error)));call('Page.enable',{},childSession).catch(()=>{});call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:false,flatten:true},childSession).catch(()=>{});}
+  if(message.method==='Runtime.exceptionThrown')errors.push(message.params.exceptionDetails.exception?.description||message.params.exceptionDetails.text);
+  if(message.method==='Page.javascriptDialogOpening')call('Page.handleJavaScriptDialog',{accept:true},message.sessionId).catch(()=>{});
+ };
+ const results=[];
+ for(const edition of process.argv.includes('--forge-only')?['Media-Compliance-Reviewer.html']:['Media-Compliance-Reviewer-Standalone.html','Media-Compliance-Reviewer.html']){
+  const {targetId}=await call('Target.createTarget',{url:'about:blank'}),{sessionId}=await call('Target.attachToTarget',{targetId,flatten:true});
+  await call('Runtime.enable',{},sessionId);await call('Page.enable',{},sessionId);await call('Target.setAutoAttach',{autoAttach:true,waitForDebuggerOnStart:false,flatten:true},sessionId);await call('Page.addScriptToEvaluateOnNewDocument',{source:slowStartupShim+'\n'+cleanupStartupShim},sessionId);await call('Page.navigate',{url:pathToFileURL(path.join(root,edition)).href},sessionId);
+  const startingView=await waitFor(async()=>{for(const [viewSession,list]of contexts){let ancestor=viewSession;while(parents.has(ancestor))ancestor=parents.get(ancestor);if(ancestor!==sessionId)continue;for(const context of list){if(!context.auxData?.isDefault)continue;try{if(await evaluate(viewSession,context.id,"typeof MediaDatabase!=='undefined'&&Boolean(document.getElementById('open-workspace-button'))"))return{session:viewSession,id:context.id};}catch(error){if(!/context|navigat/i.test(error.message))throw error;}}}},edition+' controls during startup');
+  for(const id of ['open-workspace-button','new-workspace','save-workspace','export-report','scan-button','startup-open','startup-new'])assert(await evaluate(startingView.session,startingView.id,`document.getElementById('${id}').disabled`),edition+': '+id+' must wait for initialization');
+  assert(await evaluate(startingView.session,startingView.id,"document.getElementById('media-startup-screen').open"),edition+': startup screen must cover the interface');
+  assert(await evaluate(startingView.session,startingView.id,"(()=>{const cancel=new Event('cancel',{cancelable:true});document.getElementById('media-startup-screen').dispatchEvent(cancel);return cancel.defaultPrevented;})()"),edition+': Escape cannot dismiss startup prematurely');
+  await evaluate(startingView.session,startingView.id,"MediaStartup.wait('Test: slow browser storage')");
+  assert(await evaluate(startingView.session,startingView.id,"document.getElementById('media-startup-screen').open&&!document.getElementById('media-startup-actions').hidden&&document.getElementById('media-startup-close').hidden&&!document.getElementById('media-startup-spinner').hidden&&document.getElementById('media-startup-note').textContent.includes('slow browser storage')"),edition+': waiting feedback keeps startup protected and offers reload');
+  await evaluate(startingView.session,startingView.id,"MediaStartup.update('runtime')");
+  if(process.argv.includes('--screenshots')){await call('Emulation.setDeviceMetricsOverride',{width:1024,height:768,deviceScaleFactor:1,mobile:false},sessionId);const screenshot=await call('Page.captureScreenshot',{format:'png'},sessionId);fs.writeFileSync(path.join(output,edition+'-startup.png'),Buffer.from(screenshot.data,'base64'));}
+  const appView=await waitFor(async()=>{if(errors.length)throw Error(errors.join('\n'));for(const [viewSession,list]of contexts){let ancestor=viewSession;while(parents.has(ancestor))ancestor=parents.get(ancestor);if(ancestor!==sessionId)continue;for(const context of list){if(!context.auxData?.isDefault)continue;try{if(await evaluate(viewSession,context.id,"Boolean(document.getElementById('workspace-dialog')?.open)"))return{session:viewSession,id:context.id};}catch(error){if(!/context|navigat/i.test(error.message))throw error;}}}},edition+' startup');
+  const appSession=appView.session,appContext=appView.id,rootContext=(contexts.get(sessionId)||[]).find(context=>context.auxData?.isDefault)?.id;
+  currentView={session:appSession,id:appContext};
+  assert(await evaluate(appSession,appContext,"!document.getElementById('media-startup-screen').open"),edition+': loading screen closes when the chooser is ready');
+  await waitFor(()=>evaluate(sessionId,rootContext,"!document.getElementById('media-startup-screen').open"),edition+': outer loading screen closes');
+  const liveness=await evaluate(sessionId,rootContext,"new Promise((resolve,reject)=>{const worker=window.__testWorkers[0],id='browser-probe';const timer=setTimeout(()=>reject(Error('Worker liveness probe did not reply')),5000);const receive=event=>{if(event.data.probeId!==id)return;clearTimeout(timer);worker.removeEventListener('message',receive);resolve(event.data);};worker.addEventListener('message',receive);worker.postMessage({probeId:id});})");
+  assert.equal(liveness.probeId,'browser-probe');assert.equal(typeof liveness.phase,'string');
+  assert(await evaluate(sessionId,rootContext,"window.__testCleanupSeeded&&window.__testMaintenanceLocked"),edition+': startup succeeds while another session holds the housekeeping lock');
+  await evaluate(sessionId,rootContext,"window.__testReleaseMaintenance()");
+  const cleanup=await waitFor(async()=>{const state=await evaluate(sessionId,rootContext,"window.__testCleanupInfo()");return !state.abandoned&&state;},'bounded idle cleanup removes an abandoned copy');
+  assert(cleanup.active&&cleanup.recovery&&cleanup.journal&&cleanup.recoveryBlocks===1,'Cleanup must preserve the recovery database, journal and active-session files');
+  await evaluate(sessionId,rootContext,"window.__testReleaseActiveSession();window.__testClearFakeRecovery()");
+  console.log(edition+': startup bypasses busy housekeeping; idle cleanup preserves recovery and active-session files');
+  await evaluate(sessionId,rootContext,filePickerShim);console.log(edition+': SQLite startup reached the database chooser');
+  async function completeAction(label,action,finished){await evaluate(appSession,appContext,action);await waitFor(async()=>{if(errors.length)throw Error(errors.join('\n'));if(edition.endsWith('Reviewer.html'))await evaluate(sessionId,rootContext,"(()=>{const panel=document.getElementById('forge-gesture-panel');if(panel&&!panel.hidden)document.getElementById('forge-gesture-continue').click();})()");const status=await evaluate(appSession,appContext,"document.getElementById('startup-status').textContent+' '+document.getElementById('scan-error').textContent");if(/failed|unavailable|Scan stopped/i.test(status))throw Error(label+': '+status);return evaluate(appSession,appContext,finished);},label);}
+  await evaluate(sessionId,rootContext,"window.__testCancelSave=true");
+  await completeAction('cancel database picker',"document.getElementById('startup-new').click()","document.getElementById('workspace-dialog').open&&!document.getElementById('startup-new').disabled");
+  assert(await evaluate(appSession,appContext,"!document.getElementById('database-opening-dialog').open"),edition+': cancelling the picker leaves the chooser available');
+  await evaluate(sessionId,rootContext,"window.__testNextFileRead=new Promise(resolve=>window.__testReleaseFileRead=resolve);void 0");
+  await completeAction('creation progress after the picker',"document.getElementById('startup-new').click();document.getElementById('startup-new').click()","document.getElementById('database-opening-dialog').open&&document.getElementById('database-opening-title').textContent==='Creating database'");
+  assert(await evaluate(appSession,appContext,"!document.getElementById('workspace-dialog').open&&document.getElementById('startup-new').disabled"),edition+': creation must show progress instead of returning to the chooser');
+  if(process.argv.includes('--screenshots')){const screenshot=await call('Page.captureScreenshot',{format:'png'},sessionId);fs.writeFileSync(path.join(output,edition+'-creating.png'),Buffer.from(screenshot.data,'base64'));}
+  await evaluate(sessionId,rootContext,"window.__testReleaseFileRead()");
+  await completeAction('create database','void 0',"!document.getElementById('database-opening-dialog').open&&!document.getElementById('workspace-dialog').open&&document.getElementById('toast').textContent.includes('Database created')");
+  assert((await evaluate(sessionId,rootContext,'window.__testFileSize()'))>4096,'A real SQLite file was saved');
+  await evaluate(appSession,appContext,"document.getElementById('maintenance-button').click()");
+  await waitFor(()=>evaluate(appSession,appContext,"document.getElementById('maintenance-dialog').open"),'Maintenance opens');
+  assert.deepEqual(await evaluate(appSession,appContext,"Array.from(document.getElementById('evidence-database-limit').options,o=>o.value)"),['2.5','5']);
+  await evaluate(appSession,appContext,"document.getElementById('maintenance-dialog').close()");
+  await evaluate(sessionId,rootContext,"window.__testNextFileRead=new Promise(resolve=>window.__testReleaseFileRead=resolve);void 0");
+  await completeAction('save progress before reading the file',"document.getElementById('save-workspace').click()","document.getElementById('operation-status').textContent.includes('Saving database: Checking file')");
+  await evaluate(sessionId,rootContext,"window.__testReleaseFileRead()");
+  await completeAction('finish database save','void 0',"document.getElementById('toast').textContent.includes('Database saved.')&&!document.getElementById('operation-status').textContent.includes('Saving database')");
+  if(process.argv.includes('--scan')){
+   await evaluate(sessionId,rootContext,scanFolderShim);
+   await completeAction('open scan options',"document.getElementById('scan-button').click()","document.getElementById('scan-dialog').open");
+   await completeAction('scan selected folder',"document.getElementById('choose-folder').click()","document.getElementById('scan-result-title').textContent.includes('4 media items')&&!document.getElementById('scan-button').disabled");
+   await evaluate(appSession,appContext,"document.getElementById('continue-review').click()");
+   await waitFor(()=>evaluate(appSession,appContext,"document.querySelectorAll('#results .card').length===3&&Array.from(document.querySelectorAll('#results .thumb img')).filter(img=>img.complete&&img.naturalWidth>0).length===3"),'three unique cards and saved previews');
+   assert(await evaluate(appSession,appContext,"document.getElementById('results').textContent.includes('2 locations')"),'Duplicate locations are grouped');
+   assert(await evaluate(appSession,appContext,"(()=>{document.getElementById('log-button').click();const okay=!document.getElementById('log-content').textContent.includes('Preview dimensions could not be read safely');document.getElementById('log-dialog').close();return okay;})()"),'Recycle-bin metadata must not be decoded or create false preview warnings');
+   assert.deepEqual(await evaluate(appSession,appContext,"Array.from(document.querySelectorAll('.bucket .count'),node=>Number(node.textContent))"),[3,0,0,0],'Bucket tabs show overall totals');
+   assert(await evaluate(appSession,appContext,"!document.querySelector('.bucket small')"),'Bucket tabs omit filtered-count labels');
+   await evaluate(appSession,appContext,"window.__testNativeExec=MediaDatabase.Database.prototype.exec;window.__testDatabaseGate=new Promise(resolve=>window.__testReleaseDatabase=resolve);MediaDatabase.Database.prototype.exec=function(...args){return window.__testDatabaseGate.then(()=>window.__testNativeExec.apply(this,args));};void 0");
+   try{
+    await evaluate(appSession,appContext,"document.querySelector('#results .card-foot button').click()");
+    await waitFor(()=>evaluate(appSession,appContext,"(()=>{const img=document.getElementById('inspect-image');return !img.classList.contains('hidden')&&img.complete&&img.naturalWidth>0&&document.getElementById('metadata-list').textContent.includes('Original source · folder reconnected');})()"),'current-page original preview without database reads',5000);
+   }finally{
+    await evaluate(appSession,appContext,"MediaDatabase.Database.prototype.exec=window.__testNativeExec;window.__testReleaseDatabase();document.getElementById('inspect-dialog').close()");
+   }
+   console.log(edition+': current-page original inspection passed with database reads paused');
+   for(const index of [0,1]){
+    const state=await evaluate(appSession,appContext,`(()=>{document.getElementById('inspect-dialog').close();const card=document.querySelectorAll('#results .card')[${index}];const name=card.querySelector('.filename').textContent;card.querySelector('.card-foot button').click();const image=document.getElementById('inspect-image');return{name,title:document.getElementById('inspect-title').textContent,hidden:image.classList.contains('hidden'),source:image.getAttribute('src'),details:document.getElementById('metadata-list').textContent,loading:document.getElementById('inspect-placeholder').textContent};})()`);
+    assert.equal(state.title,state.name);assert(state.hidden,'Old previews clear before loading the next item');assert.equal(state.source,null);assert(state.details.includes(state.name),'Current item details are available immediately');assert.equal(state.loading,'Loading preview…');
+    await waitFor(()=>evaluate(appSession,appContext,"(()=>{const image=document.getElementById('inspect-image');return document.getElementById('inspect-dialog').open&&!image.classList.contains('hidden')&&image.complete&&image.naturalWidth>0;})()"),'inspected preview loads after close/reopen');
+   }
+   await evaluate(appSession,appContext,"document.getElementById('inspect-dialog').close()");
+   console.log(edition+': bucket totals and immediate inspector clearing/reopening passed');
+   for(const width of [1024,800]){
+    await call('Emulation.setDeviceMetricsOverride',{width,height:768,deviceScaleFactor:1,mobile:false},sessionId);
+    const geometry=await evaluate(appSession,appContext,`(async()=>{
+     const paint=()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+     const spacer=document.createElement('div');spacer.style.cssText='height:2400px;grid-column:1/-1';document.getElementById('results').append(spacer);
+     try{
+      await paint();window.scrollTo(0,0);await paint();document.querySelector('#results .card-check').click();await paint();
+      const bar=document.getElementById('selectionbar'),header=document.querySelector('.app-head'),initial=bar.getBoundingClientRect().top;
+      window.scrollTo(0,initial+300);await paint();
+      const box=bar.getBoundingClientRect(),inset=getComputedStyle(header).position==='sticky'?header.getBoundingClientRect().bottom:0;
+      const buttons=Array.from(bar.querySelectorAll('button')).filter(button=>getComputedStyle(button).display!=='none');
+      return{initial,top:box.top,inset,height:box.height,width:innerWidth,viewport:innerHeight,toolbarBottom:document.querySelector('.toolbar').getBoundingClientRect().bottom,bottomBar:!!document.querySelector('.bulkbar'),buttonsInside:buttons.every(button=>{const b=button.getBoundingClientRect();return b.left>=box.left-1&&b.right<=box.right+1&&b.top>=box.top-1&&b.bottom<=box.bottom+1;})};
+     }finally{spacer.remove();window.scrollTo(0,0);document.getElementById('clear-selection').click();}
+    })()`);
+    assert(geometry.initial>geometry.inset+20,'The action bar starts below the result controls: '+JSON.stringify(geometry));
+    assert(Math.abs(geometry.top-geometry.inset)<2,edition+': selected-item actions must remain at the top while scrolling: '+JSON.stringify(geometry));
+    assert(geometry.toolbarBottom<=geometry.inset+1,'Search and thumbnail controls scroll away before the action bar sticks');
+    assert(geometry.height<geometry.viewport-geometry.inset&&geometry.buttonsInside,'Wrapped action buttons stay visible at '+width+' pixels');
+    assert(!geometry.bottomBar,'The duplicate bottom action bar is removed');
+   }
+   await call('Emulation.clearDeviceMetricsOverride',{},sessionId);
+   console.log(edition+': sticky selected-item actions and wrapping passed at 1024x768 and 800x768');
+   await evaluate(sessionId,rootContext,"window.__testFileWriteWaiting=false;window.__testFileWriteGate=new Promise(resolve=>window.__testReleaseFileWrite=resolve);void 0");
+   try{
+    await completeAction('save while reviewing',"document.getElementById('save-workspace').click()","document.getElementById('operation-status').textContent.includes('Saving database: Writing')");
+    await waitFor(()=>evaluate(sessionId,rootContext,"window.__testFileWriteWaiting"),'portable file write is waiting');
+    await completeAction('review one item during file saving',"document.querySelector('#results .card-check').click();document.querySelector('[data-bulk=COMPLIANT]').click()","document.querySelectorAll('#results .card').length===2");
+   }finally{
+    await evaluate(sessionId,rootContext,"window.__testFileWriteGate=null;window.__testReleaseFileWrite()");
+   }
+   await completeAction('finish save while reviewing','void 0',"!document.getElementById('operation-status').textContent.includes('Saving database')");
+   await completeAction('save review decision',"document.getElementById('save-workspace').click()","document.getElementById('toast').textContent.includes('Database saved.')&&!document.getElementById('operation-status').textContent.includes('Saving database')");
+   console.log(edition+': bucket changes remained available during a paused portable-file write');
+   console.log(edition+': scan, exclusions, recycle-bin metadata/content, duplicate grouping, saved previews and bucket review passed');
+  }
+  await completeAction('reopen database',"document.getElementById('open-workspace-button').click();document.getElementById('open-workspace-button').click()","!document.getElementById('database-opening-dialog').open&&document.getElementById('toast').textContent.includes('Database opened')");
+  if(process.argv.includes('--scan')){
+   await evaluate(appSession,appContext,"document.querySelector('[data-bucket=COMPLIANT]').click()");
+   await waitFor(()=>evaluate(appSession,appContext,"document.querySelectorAll('#results .card').length===1&&document.querySelector('#results .thumb img')?.naturalWidth>0"),'saved review and preview survive reopening');
+  }
+  const log=await evaluate(appSession,appContext,"document.getElementById('log-button').click();document.getElementById('log-content').textContent");assert(!/· ERROR ·|Open failed|Create failed|SQLite initialization failed/.test(log),log);
+  await evaluate(appSession,appContext,"document.getElementById('log-dialog').close()");
+  await evaluate(sessionId,rootContext,"window.__testWorkers[0].onerror({message:'Simulated idle worker failure'})");
+  await completeAction('worker failure is explained',"document.getElementById('save-workspace').click()","document.getElementById('toast').textContent.includes('Database worker stopped: Simulated idle worker failure')");
+  const failureLog=await evaluate(appSession,appContext,"document.getElementById('log-button').click();document.getElementById('log-content').textContent");
+  assert(failureLog.includes('Simulated idle worker failure')&&!failureLog.includes('Cannot read properties of undefined'),failureLog);
+  await evaluate(appSession,appContext,"document.getElementById('log-dialog').close()");
+  await completeAction('reopen after worker failure',"document.getElementById('open-workspace-button').click()","!document.getElementById('database-opening-dialog').open&&document.getElementById('toast').textContent.includes('Database opened')");
+  await completeAction('save after worker failure',"document.getElementById('save-workspace').click()","document.getElementById('toast').textContent.includes('Database saved.')");
+  console.log(edition+': delayed startup and explicit reopen after an idle worker failure passed');
+  const failureScript=await call('Page.addScriptToEvaluateOnNewDocument',{source:failedStartupShim},sessionId);
+  await call('Page.reload',{},sessionId);
+  const failedView=await findAppView(sessionId,"document.getElementById('media-startup-title')?.textContent==='Startup could not finish'",edition+': startup failure screen');
+  currentView=failedView;
+  assert(await evaluate(failedView.session,failedView.id,"document.getElementById('media-startup-screen').open&&document.getElementById('media-startup-phase').textContent.includes('Simulated startup worker failure')&&!document.getElementById('media-startup-actions').hidden&&document.getElementById('media-startup-spinner').hidden"),edition+': startup failure must explain the cause and offer reload');
+  for(const id of ['open-workspace-button','new-workspace','save-workspace','scan-button','startup-open','startup-new'])assert(await evaluate(failedView.session,failedView.id,`document.getElementById('${id}').disabled`),edition+': '+id+' remains unavailable after failed startup');
+  await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:failureScript.identifier},sessionId);
+  await evaluate(failedView.session,failedView.id,"document.getElementById('media-startup-reload').click()");
+  const reloadedView=await findAppView(sessionId,"document.getElementById('workspace-dialog')?.open",edition+': reload after failed startup');
+  currentView=reloadedView;
+  assert(await evaluate(reloadedView.session,reloadedView.id,"!document.getElementById('media-startup-screen').open&&!document.getElementById('startup-new').disabled"),edition+': reload must restore the database chooser');
+  console.log(edition+': startup failure feedback and Reload tool passed');
+  results.push(edition+': real SQLite startup, creation/save/reopen and Maintenance passed; no startup errors.');
+  await call('Target.closeTarget',{targetId});
+ }
+ console.log(results.join('\n'));fs.writeFileSync(path.join(output,'browser-smoke-results.json'),JSON.stringify({ok:true,results},null,2));
+})().catch(async error=>{console.error(error.stack);if(currentView)try{console.error(await evaluate(currentView.session,currentView.id,"(()=>{document.getElementById('log-button').click();return ['scan-result-title','scan-detail-message','scan-error','operation-status','result-summary','log-content'].map(id=>id+': '+document.getElementById(id)?.textContent).join('\\n');})()"));}catch(_){}console.error(stderr.slice(-1800));process.exitCode=1;}).finally(()=>{socket?.close();chrome?.kill();});

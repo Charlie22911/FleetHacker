@@ -1,0 +1,84 @@
+<template id="fh-desktop-template">
+  <div class="fh-desktop-shell" data-view="list">
+    <aside id="fh-sidebar" class="fh-sidebar">
+      <div class="fh-brand"><strong>Media Review</strong><span>Your friendly space for sorting &amp; reviewing photos</span></div>
+      <p class="fh-section-title">YOUR SPACES</p>
+      <div id="fh-queues"></div>
+      <p class="fh-section-title">HOW TO BROWSE</p>
+      <div class="fh-view-buttons" aria-label="Review view">
+        <button type="button" data-fh-view="list" aria-pressed="true">☰ List</button>
+        <button type="button" data-fh-view="gallery" aria-pressed="false">⊞ Gallery</button>
+        <button type="button" data-fh-view="quick" aria-pressed="false">⚡ Quick Review</button>
+        <button type="button" id="fh-refresh">↻ Refresh</button>
+      </div>
+      <div id="fh-card-size"></div>
+    </aside>
+    <div class="fh-sidebar-edge"><button id="fh-sidebar-toggle" class="fh-edge-button" aria-controls="fh-sidebar" aria-expanded="true" type="button">‹</button></div>
+    <main class="fh-workspace">
+      <header class="app-head fh-header">
+        <label class="fh-compact">Space <select id="fh-compact-queue" aria-label="Review queue"></select></label>
+        <span id="fh-catalog">Welcome · open or create a catalog</span>
+        <details id="fh-settings" class="fh-settings">
+          <summary title="Catalog, appearance, and tools" aria-label="Catalog, appearance, and tools">⚙</summary>
+          <div class="fh-settings-menu">
+            <button id="fh-catalog-choice" type="button">Open or create catalog…</button>
+            <label>Appearance <select id="fh-theme"></select></label>
+            <div id="fh-catalog-tools"></div>
+          </div>
+        </details>
+      </header>
+      <div id="fh-controls" class="fh-controls">
+        <section class="fh-surface fh-scan">
+          <label for="fh-source">▱ Folder</label><input id="fh-source" type="text" readonly placeholder="No folder selected">
+          <button id="fh-choose-source" type="button">Choose folder…</button>
+          <span id="fh-start"></span><span id="fh-resume"></span><span id="fh-pause"></span>
+        </section>
+        <section class="fh-search">
+          <label for="search">⌕ Find</label><span id="fh-search-field"></span>
+          <button id="fh-search-button" type="button">Search</button><span id="fh-reset"></span>
+        </section>
+        <details class="fh-expander"><summary>Filters and display</summary><div id="fh-filters"></div></details>
+        <div id="fh-actions"></div>
+        <div id="fh-scan-banners"></div>
+      </div>
+      <div class="fh-controls-edge"><button id="fh-controls-toggle" class="fh-edge-button" aria-controls="fh-controls" aria-expanded="true" type="button">⌃</button></div>
+      <section class="fh-review" aria-label="Media review workspace">
+        <div class="fh-results-frame">
+          <div class="fh-list-heading" aria-hidden="true"><span>Name</span><span>Folder</span><span>Type</span><span>Size</span><span>Modified</span><span>Reviewed by</span></div>
+          <div id="fh-results-slot"></div>
+        </div>
+        <div class="fh-preview-edge">
+          <div id="fh-preview-size" role="separator" aria-label="Resize preview" aria-controls="fh-preview" aria-orientation="vertical" tabindex="0"></div>
+          <button id="fh-preview-toggle" class="fh-edge-button" aria-controls="fh-preview" aria-expanded="true" type="button">›</button>
+        </div>
+        <aside id="fh-preview" class="fh-preview fh-surface" aria-label="Selected item preview">
+          <div class="fh-preview-stage"><img id="fh-preview-image" alt="" hidden><span id="fh-preview-empty">Select an item to preview</span></div>
+          <strong id="fh-preview-name"></strong><span id="fh-preview-path"></span><span id="fh-preview-info"></span>
+          <div class="fh-preview-actions">
+            <button id="fh-preview-details" type="button" disabled>✎ Details / notes</button>
+            <button id="fh-preview-inspect" type="button" disabled>⌕ Inspect</button>
+          </div>
+        </aside>
+        <section id="fh-quick" class="fh-quick fh-surface" aria-label="Quick Review" tabindex="0" hidden>
+          <header><span id="fh-quick-position"></span><strong id="fh-quick-name">No items</strong><span id="fh-quick-path"></span></header>
+          <div id="fh-quick-stage" class="fh-quick-stage">
+            <img id="fh-quick-image" alt="" draggable="false" hidden><span id="fh-quick-empty">No items to review</span>
+            <video id="fh-quick-video" aria-label="Original video" controls playsinline preload="auto" hidden></video>
+          </div>
+          <footer>
+            <button id="fh-quick-prev" type="button">← Previous</button><button id="fh-quick-next" type="button">Next →</button>
+            <button id="fh-quick-good" class="fh-good" type="button">↑ Looks good</button><button id="fh-quick-bad" class="fh-bad" type="button">↓ Flag item</button>
+            <button id="fh-quick-inspect" type="button">⌕ Inspect</button><button id="fh-quick-full" type="button">Full screen</button>
+            <button id="fh-quick-play" type="button" hidden>Open video</button>
+            <label id="fh-quick-rate-field" hidden>Speed <select id="fh-quick-rate"><option value="1">1×</option><option value="1.25">1.25×</option><option value="1.5">1.5×</option><option value="2">2×</option></select></label>
+            <button id="fh-zoom-out" type="button" aria-label="Zoom out">−</button><button id="fh-zoom-reset" type="button">Fit</button>
+            <button id="fh-zoom-in" type="button" aria-label="Zoom in">+</button><button id="fh-rotate" type="button" aria-label="Rotate clockwise">↷ 90°</button>
+            <span>Swipe or use arrows</span>
+          </footer>
+        </section>
+      </section>
+      <div id="fh-pagination"></div>
+      <footer class="fh-status fh-surface" aria-label="Activity"><div id="fh-operation"></div><div id="fh-workspace-state"></div></footer>
+    </main>
+  </div>
+</template>

@@ -51,24 +51,44 @@ namespace MediaReviewer {
             return CreateScoped(path,size,ticks,identity,side,byteLimit,token,null);
         }
         internal PreviewResult CreateScoped(string path,long size,long ticks,string identity,int side,int byteLimit,CancellationToken token,string root){
-            byte[] name=Encoding.UTF8.GetBytes(path),stamp=Encoding.UTF8.GetBytes(identity??""),scope=Encoding.UTF8.GetBytes(root??"");if(name.Length>131072 || stamp.Length>256 || scope.Length>131072)throw new InvalidDataException("Decoder request exceeds its path/metadata bounds");
-            return Request(writer=>{writer.Write(0);writer.Write(name.Length);writer.Write(name);writer.Write(size);writer.Write(ticks);writer.Write(stamp.Length);writer.Write(stamp);writer.Write(side);writer.Write(byteLimit);writer.Write(scope.Length);writer.Write(scope);},side,byteLimit,token);
+            return Request(PathRequest(0,path,size,ticks,identity,side,byteLimit,root),reader=>ReadImage(reader,side,byteLimit),token);
+        }
+        internal PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,CancellationToken token,string root){
+            return Request(PathRequest(2,path,size,ticks,identity,256,32768,root),reader=>{
+                int count=reader.ReadInt32();
+                if(count<1 || count>5)throw new DecoderProtocolException("Invalid private motion frame count");
+                var frames=new PreviewResult[count];
+                for(int i=0;i<count;i++)frames[i]=ReadImage(reader,256,32768);
+                return frames;
+            },token);
+        }
+        static Action<BinaryWriter> PathRequest(int kind,string path,long size,long ticks,string identity,int side,int byteLimit,string root){
+            byte[] name=Encoding.UTF8.GetBytes(path),stamp=Encoding.UTF8.GetBytes(identity??""),scope=Encoding.UTF8.GetBytes(root??"");
+            if(name.Length>131072 || stamp.Length>256 || scope.Length>131072)throw new InvalidDataException("Decoder request exceeds its path/metadata bounds");
+            return writer=>{
+                writer.Write(kind);writer.Write(name.Length);writer.Write(name);writer.Write(size);writer.Write(ticks);
+                writer.Write(stamp.Length);writer.Write(stamp);writer.Write(side);writer.Write(byteLimit);writer.Write(scope.Length);writer.Write(scope);
+            };
         }
         internal PreviewResult CreateSaved(byte[] bytes,CancellationToken token){
             if(bytes==null || bytes.Length<20 || bytes.Length>32768)throw new InvalidDataException("Saved WebP exceeds its bounded input size");
             int width,height;ImageHeader.SavedWebpDimensions(bytes,out width,out height);byte[] snapshot=(byte[])bytes.Clone();
-            try{return Request(writer=>{writer.Write(1);writer.Write(snapshot.Length);writer.Write(snapshot);},256,32768,token);}finally{Array.Clear(snapshot,0,snapshot.Length);}
+            try{return Request(writer=>{writer.Write(1);writer.Write(snapshot.Length);writer.Write(snapshot);},reader=>ReadImage(reader,256,32768),token);}
+            finally{Array.Clear(snapshot,0,snapshot.Length);}
         }
-        PreviewResult Request(Action<BinaryWriter> write,int side,int byteLimit,CancellationToken token){
+        static PreviewResult ReadImage(BinaryReader input,int side,int byteLimit){
+        int width=input.ReadInt32(),height=input.ReadInt32(),sourceWidth=input.ReadInt32(),sourceHeight=input.ReadInt32(),length=input.ReadInt32();if(width<1 || height<1 || width>side || height>side || (long)width*height>InspectionPlan.MaxPixels || sourceWidth<1 || sourceHeight<1 || (long)sourceWidth*sourceHeight>200000000 || length<1 || length>byteLimit)throw new DecoderProtocolException("Private decoder returned an unbounded image");
+        byte[] bytes=input.ReadBytes(length);if(bytes.Length!=length)throw new EndOfStreamException();int actualWidth,actualHeight;try{Preview.Dimensions(bytes,bytes.Length,out actualWidth,out actualHeight);}catch(Exception error){throw new DecoderProtocolException("Invalid encoded preview dimensions: "+error.Message);}if(actualWidth!=width || actualHeight!=height)throw new DecoderProtocolException("Encoded preview dimensions disagree with its helper frame");int labelLength=input.ReadInt32();if(labelLength<0 || labelLength>2048)throw new DecoderProtocolException("Invalid decoder label frame");byte[] label=input.ReadBytes(labelLength);if(label.Length!=labelLength)throw new EndOfStreamException();return new PreviewResult {Bytes=bytes,Width=width,Height=height,SourceWidth=sourceWidth,SourceHeight=sourceHeight,Decoder=Encoding.UTF8.GetString(label)};
+        }
+        T Request<T>(Action<BinaryWriter> write,Func<BinaryReader,T> readResponse,CancellationToken token){
             while(!Monitor.TryEnter(gate,50))token.ThrowIfCancellationRequested();
             try{
                 token.ThrowIfCancellationRequested();if(disposed)throw new ObjectDisposedException("Decoder host");Start();
-                Task<PreviewResult> read=Task.Run(()=>{
-                    if(!greeting){if(input.ReadInt32()!=Magic || input.ReadInt32()!=5)throw new DecoderProtocolException("Private decoder protocol/version mismatch");greeting=true;}
+                Task<T> read=Task.Run(()=>{
+                    if(!greeting){if(input.ReadInt32()!=Magic || input.ReadInt32()!=6)throw new DecoderProtocolException("Private decoder protocol/version mismatch");greeting=true;}
                     write(output);output.Flush();
                     int state=input.ReadInt32();if(state!=0){if(state!=1)throw new DecoderProtocolException("Invalid decoder response status");int code=input.ReadInt32(),n=input.ReadInt32();if(code<0 || code>65535 || n<0 || n>16384)throw new DecoderProtocolException("Invalid decoder error frame");byte[] message=input.ReadBytes(n);if(message.Length!=n)throw new EndOfStreamException();string text=Encoding.UTF8.GetString(message);var nativeError=new System.ComponentModel.Win32Exception(code,text);if(FileAccessNative.Transient(nativeError))throw nativeError;throw new InvalidDataException(text);}
-                    int width=input.ReadInt32(),height=input.ReadInt32(),sourceWidth=input.ReadInt32(),sourceHeight=input.ReadInt32(),length=input.ReadInt32();if(width<1 || height<1 || width>side || height>side || (long)width*height>InspectionPlan.MaxPixels || sourceWidth<1 || sourceHeight<1 || (long)sourceWidth*sourceHeight>200000000 || length<1 || length>byteLimit)throw new DecoderProtocolException("Private decoder returned an unbounded image");
-                    byte[] bytes=input.ReadBytes(length);if(bytes.Length!=length)throw new EndOfStreamException();int actualWidth,actualHeight;try{Preview.Dimensions(bytes,bytes.Length,out actualWidth,out actualHeight);}catch(Exception error){throw new DecoderProtocolException("Invalid encoded preview dimensions: "+error.Message);}if(actualWidth!=width || actualHeight!=height)throw new DecoderProtocolException("Encoded preview dimensions disagree with its helper frame");int labelLength=input.ReadInt32();if(labelLength<0 || labelLength>2048)throw new DecoderProtocolException("Invalid decoder label frame");byte[] label=input.ReadBytes(labelLength);if(label.Length!=labelLength)throw new EndOfStreamException();return new PreviewResult {Bytes=bytes,Width=width,Height=height,SourceWidth=sourceWidth,SourceHeight=sourceHeight,Decoder=Encoding.UTF8.GetString(label)};
+                    return readResponse(input);
                 });
                 var clock=Stopwatch.StartNew();
                 while(!read.IsCompleted){if(token.WaitHandle.WaitOne(25) || clock.ElapsedMilliseconds>=budget){Retire();try{read.GetAwaiter().GetResult();}catch{};token.ThrowIfCancellationRequested();throw new InvalidDataException("Preview exceeded the decoder time budget; its private process tree was stopped. The fingerprint is retained.");}}

@@ -62,7 +62,7 @@ namespace MediaReviewer {
             var panel=new DockPanel {Margin=new Thickness(18)};var dialog=Dialog("About Media Compliance Reviewer",panel,720,560);
             var actions=Bar();actions.Children.Add(ActionButton("Close",dialog.Close));Dock(panel,actions,System.Windows.Controls.Dock.Bottom);
             var text=new StackPanel();panel.Children.Add(new ScrollViewer {Content=text,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
-            text.Children.Add(Label("Media Compliance Reviewer for Windows\n.NET development build · "+Product.DotNetVersion+" · "+Product.DotNetDate+"\nMade by "+Product.Author));
+            text.Children.Add(Label("Media Compliance Reviewer for Windows\n.NET development build · "+Product.DotNetVersion+" · "+Product.DotNetDate+"\nMade by "+Product.Author+", "+Product.Contributors+"\n"+Product.EventCredit));
             using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.LGPLv2.1"))
             using(var reader=new StreamReader(resource)) {
                 text.Children.Add(new Expander {Header="SQLite "+Native.SqliteVersion+" · Public domain",Content=Label("SQLite is statically linked. Source: https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip")});
@@ -306,7 +306,7 @@ namespace MediaReviewer {
             if(available!=gemmaAvailable){gemmaAvailable=available;refresh=true;view.Advance();}
             var body=new StackPanel {Margin=new Thickness(18)};
             var dialog=Dialog("AI draft check",body,590,510);
-            body.Children.Add(Label("Choose a model for saved still-image previews. Matches appear in AI suggestions for human confirmation."));
+            body.Children.Add(Label("Choose a model for saved images and sampled frames from videos and GIFs. Matches appear in AI suggestions for human confirmation."));
             var model=new ComboBox();model.Items.Add("Marqo · fast image screening");
             if(available)model.Items.Add("Gemma 4 E2B · workplace policy");
             model.SelectedIndex=available && useGemma ? 1 : 0;

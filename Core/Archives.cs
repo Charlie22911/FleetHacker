@@ -76,11 +76,15 @@ namespace MediaReviewer {
             using(var source=Open(path,identity,token,root)){if(cutoff>0 && source.Stamp.ModifiedTicks<cutoff)return null;using(var sha=SHA256.Create()){long done=0;int n;while((n=source.Stream.Read(buffer,0,buffer.Length))>0){token.ThrowIfCancellationRequested();sha.TransformBlock(buffer,0,n,buffer,0);done+=n;if(progress!=null)progress(n);}source.Validate();sha.TransformFinalBlock(new byte[0],0,0);record.Size=source.Stamp.Size;record.ModifiedTicks=source.Stamp.ModifiedTicks;record.FileIdentity=source.Stamp.Identity;record.BytesRead=done;record.Hash=EvidenceFormat.Hex(sha.Hash);record.Algorithm="sha256";record.AlgorithmVersion=1;record.Sampling="";return record;}}
         }
         internal static PreviewResult Preview(string path,long size,long ticks,string identity,int side,int limit,CancellationToken token,string root){
+            return WithPreviewFile(path,size,ticks,identity,token,root,
+                (file,stamp)=>MediaReviewer.Preview.CreateExpectedScoped(file,stamp.Size,stamp.ModifiedTicks,stamp.Identity,side,limit,token,Native.RuntimeDirectory));
+        }
+        internal static T WithPreviewFile<T>(string path,long size,long ticks,string identity,CancellationToken token,string root,Func<string,FileStamp,T> decode){
             string file=MediaScratch.NewArchivePath(Path.GetExtension(Split(path)[1]));string own=null;
             try{using(var source=SourceRead.Open(path,size,ticks,identity,token,root)){
                 if(new DriveInfo(Path.GetPathRoot(file)).AvailableFreeSpace<source.Stamp.Size+64L*1024*1024)throw new IOException("Insufficient private temporary space for this ZIP preview");
                 using(var output=new FileStream(Paths.Io(file),FileMode.CreateNew,FileAccess.ReadWrite,FileShare.Read,65536)){own=FileAccessNative.Stamp(output).Identity;byte[] b=new byte[1024*1024];int n;while((n=source.Stream.Read(b,0,b.Length))>0){token.ThrowIfCancellationRequested();output.Write(b,0,n);}source.Validate();output.Flush();}
-            }using(var lease=new FileStream(Paths.Io(file),FileMode.Open,FileAccess.Read,FileShare.Read)){var stamp=FileAccessNative.Stamp(lease);if(stamp.Identity!=own)throw new IOException("Owned archive preview changed");return MediaReviewer.Preview.CreateExpectedScoped(file,stamp.Size,stamp.ModifiedTicks,stamp.Identity,side,limit,token,Native.RuntimeDirectory);}}
+            }using(var lease=new FileStream(Paths.Io(file),FileMode.Open,FileAccess.Read,FileShare.Read)){var stamp=FileAccessNative.Stamp(lease);if(stamp.Identity!=own)throw new IOException("Owned archive preview changed");return decode(file,stamp);}}
             finally{if(own!=null)MediaScratch.Release(file,own);}
         }
         sealed class Slice:Stream {

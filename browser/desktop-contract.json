@@ -1,0 +1,221 @@
+{
+  "version": "0.3.23-preview",
+  "applicationId": 1296257623,
+  "schema": 13,
+  "themes": {
+    "warm-light": {
+      "label": "☀ Warm Light (Cream & Terracotta)",
+      "dark": false,
+      "colors": [
+        "#FAF5EE",
+        "#FFFDF9",
+        "#33261E",
+        "#7D6B5D",
+        "#F2EAE0",
+        "#E5D9C8",
+        "#2C2018",
+        "#FBF5EE",
+        "#4A3528",
+        "#D97742",
+        "#C86432",
+        "#FFFDF9",
+        "#E3F3E8",
+        "#1E6339",
+        "#FCE8E4",
+        "#9E2B25",
+        "#FEF3E7",
+        "#FDE68A",
+        "#78350F"
+      ]
+    },
+    "cozy-dark": {
+      "label": "🌙 Cozy Dark (Warm Mocha)",
+      "dark": true,
+      "colors": [
+        "#1B1613",
+        "#27201C",
+        "#F7EFE6",
+        "#B5A292",
+        "#201A16",
+        "#3E322B",
+        "#15110E",
+        "#F7EFE6",
+        "#382B23",
+        "#F4A261",
+        "#E07A5F",
+        "#FFFFFF",
+        "#1F3A2B",
+        "#BCE5CA",
+        "#482323",
+        "#FAD1D1",
+        "#362820",
+        "#6B4415",
+        "#FDE68A"
+      ]
+    },
+    "midnight-dark": {
+      "label": "🌑 Midnight Dark (Slate & Sky)",
+      "dark": true,
+      "colors": [
+        "#0F141C",
+        "#18202C",
+        "#ECF2F8",
+        "#94A3B8",
+        "#131A24",
+        "#2D3B4E",
+        "#0B0F17",
+        "#ECF2F8",
+        "#1E293B",
+        "#38BDF8",
+        "#0284C7",
+        "#FFFFFF",
+        "#133829",
+        "#86EFAC",
+        "#451A23",
+        "#FCA5A5",
+        "#1E2D40",
+        "#713F12",
+        "#FEF08A"
+      ]
+    },
+    "neon-green": {
+      "label": "💻 Terminal Matrix (Dark + Neon Green)",
+      "dark": true,
+      "colors": [
+        "#070B07",
+        "#0E150E",
+        "#39FF14",
+        "#22C55E",
+        "#0A100A",
+        "#1E3F20",
+        "#050805",
+        "#39FF14",
+        "#132A15",
+        "#00FF66",
+        "#15803D",
+        "#39FF14",
+        "#0F2E18",
+        "#4ADE80",
+        "#3B1219",
+        "#FF6B6B",
+        "#142E16",
+        "#3F320A",
+        "#FACC15"
+      ]
+    },
+    "synthwave-dark": {
+      "label": "⚡ Synthwave Night (Dark + Neon Cyan)",
+      "dark": true,
+      "colors": [
+        "#120D1D",
+        "#1C152E",
+        "#E0F2FE",
+        "#C084FC",
+        "#161024",
+        "#3B2854",
+        "#0D0916",
+        "#F0F9FF",
+        "#2E1F47",
+        "#06B6D4",
+        "#D946EF",
+        "#FFFFFF",
+        "#113634",
+        "#5EEAD4",
+        "#4C152E",
+        "#FDA4AF",
+        "#2A1B4E",
+        "#5C3409",
+        "#FDE047"
+      ]
+    },
+    "forest-sage": {
+      "label": "🌲 Forest Sage (Soft Earthy Green)",
+      "dark": false,
+      "colors": [
+        "#F1F5F0",
+        "#FAFCF9",
+        "#1C2D20",
+        "#5A7060",
+        "#E4ECE2",
+        "#CBD8C8",
+        "#18281D",
+        "#F2F7F2",
+        "#2A4231",
+        "#40916C",
+        "#2D6A4F",
+        "#FFFFFF",
+        "#DCFCE7",
+        "#166534",
+        "#FEE2E2",
+        "#991B1B",
+        "#E3F2E8",
+        "#FEF3C7",
+        "#92400E"
+      ]
+    },
+    "nordic-light": {
+      "label": "❄ Nordic Daylight (Cool Frost)",
+      "dark": false,
+      "colors": [
+        "#F3F6FA",
+        "#FFFFFF",
+        "#1E293B",
+        "#64748B",
+        "#E8EEF5",
+        "#D4DEE9",
+        "#1E293B",
+        "#F8FAFC",
+        "#334155",
+        "#0284C7",
+        "#0369A1",
+        "#FFFFFF",
+        "#E0F2FE",
+        "#0369A1",
+        "#FFE4E6",
+        "#BE123C",
+        "#E6F2FF",
+        "#FEF3C7",
+        "#92400E"
+      ]
+    }
+  },
+  "draft": {
+    "bucket": "AI_SUGGESTIONS",
+    "marqo": {
+      "id": "Marqo/nsfw-image-detection-384:1",
+      "threshold": 7,
+      "file": {
+        "name": "Marqo-NSFW-384.onnx",
+        "sha256": "2e0ead404a2527e4f5f81f053519f8d315c9ba8db42ffdfc3309f08061bfe8ba"
+      }
+    },
+    "gemma": {
+      "id": "Google/gemma-4-E2B-it-Q4_0+Q8_0:1",
+      "threshold": 55,
+      "weights": {
+        "name": "gemma-4-E2B-it-Q4_0.gguf",
+        "sha256": "8e30dff3ac4c8434c49a7036fa15564bdbb6044e42bf04550bf1a096ad7e6a52"
+      },
+      "projector": {
+        "name": "mmproj-gemma-4-E2B-it-Q8_0.gguf",
+        "sha256": "9406f99c16d68cda4f1f0552192dcc99021ea1fc6d2fd50b1dc3ccf30d04b292"
+      },
+      "criteria": "A: Exposed breasts, genitals, bare buttocks, sexual activity, or clearly implied toplessness where arms or objects cover the breasts. This includes artistic or non-pornographic nudity.\nB: Sexualized lingerie or underwear posing, including a buttocks-focused close-up, even with no nudity.\nC: Ordinary swimwear or bikini with a visible garment covering the relevant areas, no nudity, and no sexualized framing.\nD: Ordinary benign content such as maps, diagrams, landscapes, objects, or normally clothed people.\nE: The image is too unclear to distinguish a plausible A or B case from an ordinary image.\nIf a person's chest is obscured, check for a visible top before choosing C.",
+      "criteriaLimit": 900
+    },
+    "motion": {
+      "gif": [
+        0,
+        33,
+        66
+      ],
+      "video": [
+        0,
+        20,
+        40,
+        60,
+        80
+      ]
+    }
+  }
+}

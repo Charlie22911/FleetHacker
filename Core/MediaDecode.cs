@@ -12,7 +12,7 @@ namespace MediaReviewer {
         [StructLayout(LayoutKind.Sequential)] struct Input { public ReadBytes Read;public SeekBytes Seek;public IntPtr State; }
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr AllocatePixels(int width,int height,int stride,int capacity);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int DecodeFrame(string format,ref Input input,AllocatePixels allocate,int side,int maxPixels,out int stride,
-            out int width,out int height,out int sourceWidth,out int sourceHeight,out int rotation);
+            out int width,out int height,out int sourceWidth,out int sourceHeight,out int rotation,int percent);
 
         internal static PreviewResult CreateSavedWebp(byte[] bytes) {
             int width,height;ImageHeader.SavedWebpDimensions(bytes,out width,out height);
@@ -20,6 +20,14 @@ namespace MediaReviewer {
         }
 
         internal static PreviewResult CreateScoped(string path,long size,long ticks,string identity,int side,int limit,string root) {
+            return DecodeScoped(path,size,ticks,identity,side,limit,root,false)[0];
+        }
+
+        internal static PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,string root){
+            return DecodeScoped(path,size,ticks,identity,256,32768,root,true);
+        }
+
+        static PreviewResult[] DecodeScoped(string path,long size,long ticks,string identity,int side,int limit,string root,bool motion){
             if(!((side==256 && limit==32768) || (side>=1 && side<=InspectionPlan.MaxSide && limit==InspectionPlan.EncodedLimit)))
                 throw new InvalidDataException("Invalid bounded preview request.");
             string extension=Path.GetExtension(path).TrimStart('.').ToLowerInvariant();
@@ -36,6 +44,21 @@ namespace MediaReviewer {
                 string demuxer=type=="mpeg" && header.Length>=4 && header[0]==0 && header[1]==0 && header[2]==1 && header[3]==0xB3 ? "mpegvideo" : Demuxer(type);
                 long inputLimit=Formats.IsVideo(type) || type=="heif" || type=="heic" ? 64L<<30 : 128L<<20;
                 if(source.Length>inputLimit)throw new InvalidDataException("The input exceeds the preview limit. The fingerprint is retained.");
+                if(motion){
+                    if(!Formats.IsPlayable(type))throw new InvalidDataException("The recorded motion source has no supported video or GIF signature.");
+                    if(type=="gif")demuxer="gif";
+                    int[] positions=type=="gif" ? new[]{0,33,66} : new[]{0,20,40,60,80};
+                    var frames=new System.Collections.Generic.List<PreviewResult>(positions.Length);
+                    foreach(int position in positions){
+                        source.Position=0;
+                        var frame=Linked(source,demuxer,side,limit,position);
+                        if(frame==null)continue;
+                        if(frames.Any(previous=>previous.Bytes.SequenceEqual(frame.Bytes)))Array.Clear(frame.Bytes,0,frame.Bytes.Length);
+                        else frames.Add(frame);
+                    }
+                    if(!before.Same(FileAccessNative.Stamp(source)))throw new InvalidDataException("Source changed during frame sampling.");
+                    return frames.ToArray();
+                }
                 PreviewResult result;
                 if(demuxer!=null)result=Linked(source,demuxer,side,limit);
                 else if(Formats.IsRaw(type)) {
@@ -44,7 +67,7 @@ namespace MediaReviewer {
                 } else if(type=="svg")throw new InvalidDataException("SVG rendering is unavailable in this build. The fingerprint is retained.");
                 else result=WindowsImage(source,type,side,limit);
                 if(!before.Same(FileAccessNative.Stamp(source)))throw new InvalidDataException("Source changed during preview generation.");
-                return result;
+                return new[]{result};
             }
         }
 
@@ -62,7 +85,7 @@ namespace MediaReviewer {
             }
         }
 
-        static PreviewResult Linked(Stream source,string format,int side,int limit) {
+        static PreviewResult Linked(Stream source,string format,int side,int limit,int percent=0) {
             var decode=Native.Export<DecodeFrame>("mcr_decode");
             var scratch=new byte[65536];Exception ioError=null;
             var input=new Input {
@@ -88,10 +111,11 @@ namespace MediaReviewer {
             int w,h,sw,sh,angle,pitch;
             BitmapSource frame;
             try{
-                int result=decode(format,ref input,allocate,side,(int)InspectionPlan.MaxPixels,out pitch,out w,out h,out sw,out sh,out angle);
+                int result=decode(format,ref input,allocate,side,(int)InspectionPlan.MaxPixels,out pitch,out w,out h,out sw,out sh,out angle,percent);
                 GC.KeepAlive(input);
                 if(ioError!=null)throw ioError;
                 if(allocationError!=null)throw allocationError;
+                if(result==1 && percent!=0)return null;
                 if(result!=0 || pixels==null || w!=allocatedWidth || h!=allocatedHeight || pitch!=allocatedStride)
                     throw new InvalidDataException("Linked FFmpeg could not decode a bounded frame ("+result+").");
                 frame=BitmapSource.Create(w,h,96,96,PixelFormats.Bgra32,null,pixels,pitch);

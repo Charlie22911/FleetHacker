@@ -567,6 +567,7 @@ namespace MediaReviewer {
             CheckRecordedCopyFallback(directory,image);
             if(playbackFixtures!=null){
                 CheckPlaybackFormats(directory,playbackFixtures);
+                CheckMotionDraft(directory,playbackFixtures);
                 if(File.Exists(Path.Combine(playbackFixtures,"wide.webp")))CheckLinkedDimensions(playbackFixtures);
             }
             Console.WriteLine("Embedded SQLite, scan, duplicate locations, renamed media, review, preferences, preview history, source reconnection, case sheet, report, integrity and encrypted Evidence passed.");return 0;
@@ -700,6 +701,45 @@ namespace MediaReviewer {
             }
             Console.WriteLine("Wide and tall WebP retained 6,000 pixels, and square WebP stayed within the pixel cap.");
         }
+        static void CheckMotionDraft(string directory,string fixtures){
+            string[] names={"draft-timeline.mp4","draft-timeline.gif"};
+            if(names.Any(name=>!File.Exists(Path.Combine(fixtures,name))))return;
+            string root=Directory.CreateDirectory(Path.Combine(directory,"motion-draft")).FullName;
+            foreach(string name in names)File.Copy(Path.Combine(fixtures,name),Path.Combine(root,name));
+            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"motion-draft.sqlite"),true)){
+                Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1});
+                Wait(()=>!engine.Status.RunningScan);
+                var classifier=new MotionFixtureClassifier();
+                string offline=Path.Combine(root,names[0]);
+                File.Move(offline,offline+".offline");
+                try{
+                    Result(engine,engine.RequestDraftReview(()=>classifier));
+                    var suggestions=Result(engine,engine.RequestPage(new PageRequest {Bucket=DraftReview.Bucket})).Page;
+                    Check(suggestions.Rows.Count==1 && suggestions.Rows[0].Extension=="gif" && classifier.Calls==3,
+                        "A later GIF frame must produce a suggestion while the unavailable video stays unscored.");
+                }finally{File.Move(offline+".offline",offline);}
+                Wait(()=>!engine.DraftReviewActive);
+                Result(engine,engine.RequestDraftReview(()=>classifier));
+                var page=Result(engine,engine.RequestPage(new PageRequest {Bucket=DraftReview.Bucket})).Page;
+                Check(page.Rows.Count==2 && page.Rows.All(row=>row.AiScore==.91) && classifier.Calls==8,
+                    "Motion scores must keep the highest frame and reuse the completed GIF score.");
+            }
+            Console.WriteLine("Video and GIF AI sampling, later-frame scoring, source retry and score reuse passed.");
+        }
+
+        sealed class MotionFixtureClassifier:IDraftClassifier {
+            public string Device {get{return "";}}
+            internal int Calls;
+            public double? Score(byte[] bytes,CancellationToken token){
+                Calls++;
+                var frame=new System.Windows.Media.Imaging.FormatConvertedBitmap(MediaLoader.Decode(bytes,256,token),PixelFormats.Bgr24,null,0);
+                var pixel=new byte[3];frame.CopyPixels(new Int32Rect(frame.PixelWidth/2,frame.PixelHeight/2,1,1),pixel,3,0);
+                return pixel[2]>pixel[0]+40 ? .91 : .01;
+            }
+            public void Dispose(){}
+        }
+
         static void CheckPlaybackFormats(string directory,string fixtures) {
             string root=Path.Combine(directory,"playback-formats");
             string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;

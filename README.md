@@ -1,14 +1,21 @@
-# Local AI Assisted Media Compliance Reviewer for Windows
+# FleetHacker Media Compliance Reviewer
 
 Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for finding and reviewing images and videos in large folder collections. The light and dark WPF workspace has List, Thumbnails and Quick Review views, a review sidebar, and a preview pane.
 
-[Download a GitHub preview](https://github.com/Charlie22911/FleetHacker/releases) or [view the FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+## Downloads
+
+- [Download for Windows (.exe)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.exe)
+- [Download the offline browser preview (.html)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
+
+The [release page](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.23-preview) includes both source archives. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
 Thanks to Jeremy Gerdes and the Phoenix LAI contributors for their work on local Gemma and Vulkan on Windows. [Phoenix LAI](https://github.com/fleethacker-data-crucible/phoenix-lai), [MIT license](https://github.com/fleethacker-data-crucible/phoenix-lai/blob/ca1b88a99bc5825c74d9ad8018422b1bc06df968/LICENSE).
 
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the catalog and manual review tools. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
+
+Open the downloaded HTML directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own catalog format and opens Windows portable backups read-only. Use the Windows build for AI draft review and access to Evidence stored in Windows catalogs. [Browser usage and build instructions](browser/README.md)
 
 ## Download Gemma for advanced AI review
 

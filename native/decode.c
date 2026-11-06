@@ -35,10 +35,10 @@ static int deny_external(AVFormatContext *format, AVIOContext **io, const char *
 /* Buffers are caller-owned. The return code is a libav error, or zero. */
 __declspec(dllexport) int mcr_decode(const char *name, Input *input, AllocatePixels allocate, int side,
         int max_pixels, int *stride_out,
-        int *width, int *height, int *source_width, int *source_height, int *rotation) {
+        int *width, int *height, int *source_width, int *source_height, int *rotation, int percent) {
     const AVInputFormat *demuxer = av_find_input_format(name);
     if (!demuxer || !allocate || side < 1 || side > 8192 ||
-            max_pixels < 1 || max_pixels > 8 * 1024 * 1024) return AVERROR(EINVAL);
+            max_pixels < 1 || max_pixels > 8 * 1024 * 1024 || percent < 0 || percent > 80) return AVERROR(EINVAL);
     AVFormatContext *format = avformat_alloc_context();
     AVCodecContext *decoder = NULL;
     AVPacket *packet = NULL;
@@ -72,6 +72,21 @@ __declspec(dllexport) int mcr_decode(const char *name, Input *input, AllocatePix
     decoder->max_pixels = 32000000;
     decoder->thread_count = 1;
     if ((rc = avcodec_open2(decoder, codec, NULL)) < 0) goto done;
+    int64_t target = AV_NOPTS_VALUE;
+    if (percent) {
+        AVStream *track = format->streams[stream];
+        int gif = !strcmp(name, "gif");
+        int64_t duration = track->duration;
+        if (duration <= 0 && format->duration > 0)
+            duration = av_rescale_q(format->duration, AV_TIME_BASE_Q, track->time_base);
+        if (duration <= 0)
+            duration = av_rescale_q((gif ? 3 : 10) * AV_TIME_BASE, AV_TIME_BASE_Q, track->time_base);
+        int64_t start = track->start_time == AV_NOPTS_VALUE ? 0 : track->start_time;
+        target = av_sat_add64(start, av_rescale(duration, percent, 100));
+        /* GIF frames can depend on prior canvas updates. Decode the first loop from its start. */
+        if (!gif && av_seek_frame(format, stream, target, AVSEEK_FLAG_BACKWARD) >= 0)
+            avcodec_flush_buffers(decoder);
+    }
     rc = AVERROR_INVALIDDATA;
     for (int i = 0; i < 1500; ++i) {
         int read = av_read_frame(format, packet);
@@ -84,11 +99,18 @@ __declspec(dllexport) int mcr_decode(const char *name, Input *input, AllocatePix
             av_packet_unref(packet);
         }
         if (rc < 0 && rc != AVERROR(EAGAIN) && rc != AVERROR_EOF) goto done;
-        rc = avcodec_receive_frame(decoder, frame);
-        if (rc == 0) break;
-        if (rc != AVERROR(EAGAIN) || read == AVERROR_EOF) goto done;
+        while ((rc = avcodec_receive_frame(decoder, frame)) == 0) {
+            if (target == AV_NOPTS_VALUE || frame->best_effort_timestamp >= target)
+                goto render;
+            av_frame_unref(frame);
+        }
+        if (rc == AVERROR_EOF || (rc == AVERROR(EAGAIN) && read == AVERROR_EOF)) break;
+        if (rc != AVERROR(EAGAIN)) goto done;
     }
-    if (rc < 0 || frame->width < 1 || frame->height < 1 || (int64_t)frame->width * frame->height > 32000000) {
+    rc = percent ? 1 : AVERROR_INVALIDDATA;
+    goto done;
+render:
+    if (frame->width < 1 || frame->height < 1 || (int64_t)frame->width * frame->height > 32000000) {
         rc = AVERROR_INVALIDDATA; goto done;
     }
     int w = frame->width, h = frame->height;
