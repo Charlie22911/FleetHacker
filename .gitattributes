@@ -1,2 +1,3 @@
 native/*.sh text eol=lf
+steganography/*.sh text eol=lf
 browser/** -text

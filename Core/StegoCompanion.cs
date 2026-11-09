@@ -16,15 +16,16 @@ namespace MediaReviewer {
     }
     internal sealed class StegoCapabilities {
         public string Product {get;set;}public int ProtocolVersion {get;set;}public string Nonce {get;set;}
-        public StegoEngineCapability[] Engines {get;set;}
+        public StegoEngineCapability[] Engines {get;set;}public bool FullCoverage {get;set;}
     }
     internal sealed class StegoPackageInfo {
-        public bool Present,Trusted,Compatible,Ready;
+        public bool Present,Trusted,Compatible,Ready,FullCoverage;
         public string Message="";
         public StegoEngineCapability[] Engines=new StegoEngineCapability[0];
     }
     internal static class StegoCompanion {
         internal const string FileName="FleetHacker.Steganography.exe";
+        internal static string WireJson(string value){var ascii=new StringBuilder(value.Length);foreach(char ch in value){if(ch>127)ascii.Append("\\u").Append(((int)ch).ToString("x4",System.Globalization.CultureInfo.InvariantCulture));else ascii.Append(ch);}return ascii.ToString();}
         internal static string EmbeddedPin(){
             using(var stream=Assembly.GetExecutingAssembly().GetManifestResourceStream("Steganography.sha256")){
                 if(stream==null)return "";
@@ -41,7 +42,7 @@ namespace MediaReviewer {
         }
         static StegoCapabilities Handshake(string path,CancellationToken token){
             using(var job=new DecoderJob(256,1))
-            using(var process=new Process {StartInfo=new ProcessStartInfo(path,"--capabilities") {UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(path),RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true}}){
+            using(var process=new Process {StartInfo=new ProcessStartInfo(path,"--capabilities") {UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(path),RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,StandardOutputEncoding=Encoding.UTF8,StandardErrorEncoding=Encoding.UTF8}}){
                 bool started=false,assigned=false;Task<string> reply=null;Task drain=null;
                 try{
                     token.ThrowIfCancellationRequested();process.Start();started=true;job.Assign(process);assigned=true;
@@ -84,7 +85,8 @@ namespace MediaReviewer {
                     if(!String.Equals(digest,expectedHash,StringComparison.OrdinalIgnoreCase)){info.Message="The analysis package does not match this application build.";return info;}
                     info.Trusted=true;var caps=Handshake(path,token);info.Compatible=true;info.Engines=caps.Engines;
                     info.Ready=new[]{"aletheia","zsteg","binwalk"}.All(id=>caps.Engines.Any(e=>e.Id==id&&e.State=="available"));
-                    info.Message=info.Ready ? "Analysis engines available." : "The companion is compatible. Required analysis engines are unavailable.";
+                    info.FullCoverage=caps.FullCoverage;
+                    info.Message=info.Ready ? info.FullCoverage ? "Analysis engines available." : "Analysis available with incomplete coverage. Inspect engine limitations in every result." : "The companion is compatible. Required analysis engines are unavailable.";
                 }
             }catch(OperationCanceledException){throw;}
             catch(Exception error){info.Message="Analysis package unavailable: "+error.GetBaseException().Message;}

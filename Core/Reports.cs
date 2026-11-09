@@ -102,7 +102,7 @@ namespace MediaReviewer {
         void RequireReportWritable(){if(reportActive)throw new InvalidOperationException("A report is being exported. Wait or cancel it before changing reviews.");}
         public string RequestReport(ReportOptions options){
             if(options==null)throw new ArgumentNullException("options");var copy=options.Copy();copy.Validate();long epoch=VaultGeneration;if(copy.IncludeEvidence && !VaultUnlocked)throw new InvalidOperationException("Unlock stored originals before including Evidence in a plaintext report.");
-            lock(scanGate){if(reportActive || (scan!=null && !scan.Finished) || sourceConnectionBusy)throw new InvalidOperationException("Finish or cancel the scan/source task before exporting a report.");reportActive=true;try{return EnqueueOperation("Report",(db,t,p)=>ExportReport(db,copy,epoch,t,p),4096+copy.Destination.Length*2L,()=>{lock(scanGate)reportActive=false;});}catch{reportActive=false;throw;}}
+            lock(scanGate){if(reportActive || StegoAnalysisActive || (scan!=null && !scan.Finished) || sourceConnectionBusy)throw new InvalidOperationException("Finish or cancel the scan or analysis before exporting a report.");reportActive=true;try{return EnqueueOperation("Report",(db,t,p)=>ExportReport(db,copy,epoch,t,p),4096+copy.Destination.Length*2L,()=>{lock(scanGate)reportActive=false;});}catch{reportActive=false;throw;}}
         }
         string ExportReport(SqliteConnection db,ReportOptions options,long epoch,CancellationToken token,Action<long,long,string> progress){
             long revision=(long)WaitWrite(w=>(object)Catalog.Revision(w));string states=options.IncludeEvidence ? "('NON_COMPLIANT','EVIDENCE')" : "('NON_COMPLIANT')";long after=0,groups=0;

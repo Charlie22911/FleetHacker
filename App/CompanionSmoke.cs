@@ -26,8 +26,8 @@ namespace MediaReviewer {
             string pin;using(var hash=SHA256.Create())using(var input=File.OpenRead(filename))pin=BitConverter.ToString(hash.ComputeHash(input)).Replace("-","").ToLowerInvariant();
             var valid=run(directory,pin,CancellationToken.None);
             Check((bool)Value(valid,"Trusted")&&(bool)Value(valid,"Compatible"),"The pinned companion must complete a compatible handshake");
-            Check(!(bool)Value(valid,"Ready"),"A package without validated engines must not advertise full analysis readiness");
-            byte[] changed=File.ReadAllBytes(filename);changed[changed.Length-1]^=1;File.WriteAllBytes(filename,changed);
+            Check(!(bool)Value(valid,"FullCoverage"),"Incomplete Aletheia coverage must remain explicit");
+            using(var changed=new FileStream(filename,FileMode.Open,FileAccess.ReadWrite,FileShare.None)){changed.Position=changed.Length-1;int last=changed.ReadByte();changed.Position--;changed.WriteByte((byte)(last^1));}
             var altered=run(directory,pin,CancellationToken.None);
             Check(!(bool)Value(altered,"Trusted"),"Changing one byte of a valid package must reject its pinned identity");
             string fault=Path.Combine(directory,"fault.exe");

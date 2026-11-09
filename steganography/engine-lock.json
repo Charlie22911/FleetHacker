@@ -1,0 +1,23 @@
+{
+  "schema": 1,
+  "python": {
+    "version": "3.11.18",
+    "release": "20261026",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.11.18%2B20261026-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+    "sha256": "67215a7bf1643e33d01b17ee3f1e91a8b0b39163746855ee02594bf0608f68b4"
+  },
+  "ruby": {
+    "version": "4.0.9-1",
+    "url": "https://github.com/oneclick/rubyinstaller2/releases/download/RubyInstaller-4.0.9-1/rubyinstaller-4.0.9-1-x64.7z",
+    "sha256": "1dc0715916251a13c4f6a550a3da1f2c726bff869371fd573a65234c008f47b4"
+  },
+  "aletheia": {
+    "revision": "348dc41be66ad8dfecac54b27ba7f2963a6a3a57"
+  },
+  "zsteg": {
+    "version": "0.2.14"
+  },
+  "binwalk": {
+    "revision": "26713972e3f9f52dc37d4a421c4554b0bd9e82ef"
+  }
+}

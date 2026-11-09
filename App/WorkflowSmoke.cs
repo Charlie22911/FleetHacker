@@ -28,7 +28,7 @@ namespace MediaReviewer {
                 var window=controller.Window;window.Width=1400;window.Height=900;controller.Open(database,false);window.Show();
                 var cards=Field<ObservableCollection<CardItem>>(controller,"cards");Wait(()=>cards.Count==total&&cards[0].Image!=null);
                 Wait(()=>((Button)window.FindName("SteganographyButton")).Visibility==Visibility.Visible);
-                Check(!Field<StegoPackageInfo>(controller,"stegoPackage").Ready,"A compatible package without engines must remain explicitly unavailable");
+                Check(!Field<StegoPackageInfo>(controller,"stegoPackage").FullCoverage,"Incomplete engine coverage must remain explicit");
                 cards[0].IsSelected=true;
                 if(mode=="selection" || mode=="gallery"){
                     if(mode=="gallery")((Button)window.FindName("ThumbnailsModeButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));

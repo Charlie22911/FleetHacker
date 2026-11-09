@@ -32,7 +32,7 @@ namespace MediaReviewer {
     }
     public sealed partial class ReviewerEngine {
         bool sourceConnectionBusy;
-        object OwnSourceConnection(Func<object> body,string busyMessage="Cancel the scan and wait for its owned workers before reconnecting sources."){lock(scanGate){if(reportActive || (scan!=null && !scan.Finished))throw new InvalidOperationException(busyMessage);sourceConnectionBusy=true;}try{return body();}finally{lock(scanGate)sourceConnectionBusy=false;}}
+        object OwnSourceConnection(Func<object> body,string busyMessage="Finish or cancel the scan or analysis before reconnecting sources."){lock(scanGate){if(reportActive || StegoAnalysisActive || (scan!=null && !scan.Finished))throw new InvalidOperationException(busyMessage);sourceConnectionBusy=true;}try{return body();}finally{lock(scanGate)sourceConnectionBusy=false;}}
         static string ConnectionId(string id){Guid value;if(!Guid.TryParseExact(id,"N",out value))throw new ArgumentException("Invalid source check identifier");return value.ToString("N");}
         string QueueSourceRead(string kind,Func<SqliteConnection,object> body,long cost=2048){
             if(!ready || closing || faulted)throw new InvalidOperationException("Database is not ready");string id=Guid.NewGuid().ToString("N");var work=new DbWork {Body=body,Done=value=>Respond(new UiResult {Kind=kind,RequestId=id,Success=true,SourceConnection=value as SourceConnection,SourceRoots=value as SourceRootPage,Reconnection=value as ReconnectBatch}),Failed=error=>Respond(new UiResult {Kind=kind,RequestId=id,Error=error.Message})};if(!reads.TryAdd(work,cost))throw new InvalidOperationException("Source reader is busy; refresh shortly.");return id;

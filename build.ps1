@@ -3,7 +3,7 @@ param([switch]$ManagedOnly,[string]$OutputName='Media Compliance Reviewer.exe')
 $ErrorActionPreference='Stop'
 if($OutputName -notmatch '^[^\\/:*?"<>|]+\.exe$'){throw 'OutputName must be an executable filename.'}
 $root=$PSScriptRoot
-& "$root/steganography/build.ps1"
+& "$root/steganography/build.ps1" -Optional
 $framework=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
 $work=New-Item -ItemType Directory -Force -Path "$root/.build"
 $null=New-Item -ItemType Directory -Force -Path "$root/dist"

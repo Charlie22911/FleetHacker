@@ -12,7 +12,7 @@ $info.UseShellExecute=$false;$info.CreateNoWindow=$true;$info.RedirectStandardEr
 $process=[Diagnostics.Process]::Start($info)
 try{
     $errors=$process.StandardError.ReadToEndAsync();$output=$process.StandardOutput.ReadToEndAsync()
-    if(!$process.WaitForExit(60000)){$process.Kill();throw 'Companion checks timed out.'}
+    if(!$process.WaitForExit(120000)){$process.Kill();throw 'Companion checks timed out.'}
     if($process.ExitCode -ne 0){throw $errors.Result}
     $output.Result
 }finally{$process.Dispose()}

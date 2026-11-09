@@ -196,7 +196,7 @@ namespace MediaReviewer {
         string EnqueueDraftReview(Func<string,IDraftClassifier> classifier,bool gemma,bool cpuOnly=false){
             lock(scanGate){
                 if(draftCriteriaSaving)throw new InvalidOperationException("Wait for the Gemma criteria to finish saving.");
-                if(draftReviewActive || scan!=null && !scan.Finished)throw new InvalidOperationException("Wait for the scan or AI draft check to finish.");
+                if(draftReviewActive || StegoAnalysisActive || scan!=null && !scan.Finished)throw new InvalidOperationException("Wait for the scan or analysis to finish.");
                 draftReviewActive=true;
                 try{
                     return EnqueueOperation("AI draft check",(db,token,progress)=>{

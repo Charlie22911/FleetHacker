@@ -1,0 +1,34 @@
+[
+  {
+    "path": "usr/bin/file.exe",
+    "sha256": "9c70cd7f49560a672ebbe707a8f21fe5312a2d3f6277fd718c23f2a477879fd9"
+  },
+  {
+    "path": "usr/bin/msys-2.0.dll",
+    "sha256": "2ea49553e4c03055dcf1c4a2bef54668081a07663fba283f4b34cf70f2157191"
+  },
+  {
+    "path": "usr/bin/msys-bz2-1.dll",
+    "sha256": "1082896c71da5e62dfd8e421fba35fa3123e6e1e2782381c08258917117b51cd"
+  },
+  {
+    "path": "usr/bin/msys-lzma-5.dll",
+    "sha256": "e4eeb83b8fee005114204a933d47b2518f04152d05a231161e138af70a89b5a4"
+  },
+  {
+    "path": "usr/bin/msys-magic-1.dll",
+    "sha256": "1b0ecf8674a9d74ebcf8e208231eaab7a25f906ae46ba055bad0a9241a386a10"
+  },
+  {
+    "path": "usr/bin/msys-z.dll",
+    "sha256": "f548bb1632160282c3853415182d695c655d0eb7c12aa42a0538161898694b6f"
+  },
+  {
+    "path": "usr/bin/msys-zstd-1.dll",
+    "sha256": "0ebf082dc73962688a14bd26465e05972a51a3ac5ef11fdf8cc71b93b89cea8d"
+  },
+  {
+    "path": "usr/share/misc/magic.mgc",
+    "sha256": "2890a88db4288586bb290e0f1a5ae68c9421b4c80ede526e1bd0b1e2d6542795"
+  }
+]

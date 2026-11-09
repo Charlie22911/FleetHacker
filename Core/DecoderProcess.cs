@@ -21,8 +21,10 @@ namespace MediaReviewer {
         [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
         internal DecoderJob():this(384){}
         internal DecoderJob(int memoryMiB):this(memoryMiB,2){}
-        internal DecoderJob(int memoryMiB,uint processes):base(true) {
-            if(memoryMiB<64 || memoryMiB>(processes==1 ? 8192 : 384))throw new ArgumentOutOfRangeException("memoryMiB");
+        internal DecoderJob(int memoryMiB,uint processes):this(memoryMiB,processes,false){}
+        internal static DecoderJob Analysis(){return new DecoderJob(8192,16,true);}
+        DecoderJob(int memoryMiB,uint processes,bool analysis):base(true) {
+            if(memoryMiB<64 || processes<1 || processes>16 || memoryMiB>(analysis || processes==1 ? 8192 : 384))throw new ArgumentOutOfRangeException("memoryMiB");
             SetHandle(CreateJobObject(IntPtr.Zero,null));if(IsInvalid)throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),"Cannot create the private decoder job");
             var limits=new Limits { Basic=new Basic {Flags=0x2000|0x200|8,Active=processes},JobMemory=new UIntPtr((ulong)memoryMiB*1024*1024) };
             if(!SetInformationJobObject(handle,9,ref limits,(uint)Marshal.SizeOf(limits))){int code=Marshal.GetLastWin32Error();Dispose();throw new System.ComponentModel.Win32Exception(code,"Cannot apply decoder memory/process limits");}

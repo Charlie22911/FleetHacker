@@ -1,0 +1,32 @@
+[
+  {
+    "file": "bzip2-1.0.8-4.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/bzip2-1.0.8-4.src.tar.zst",
+    "sha256": "a7e9ea6335ef2902508de0bbbb70e2e9909b6b7b6d05fc207f8fdf0cf44ad053"
+  },
+  {
+    "file": "file-5.48-1.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/file-5.48-1.src.tar.zst",
+    "sha256": "29859c6060a1514d8fd8f44867b509b0e7c0f004fbcbfc5b997ac0de0e977904"
+  },
+  {
+    "file": "msys2-runtime-3.6.9-2.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/msys2-runtime-3.6.9-2.src.tar.zst",
+    "sha256": "e4d8871643e0218a895ba4929ba7edad10cba824de9fa31dd43eb121c032567d"
+  },
+  {
+    "file": "xz-5.8.3-1.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/xz-5.8.3-1.src.tar.zst",
+    "sha256": "3f6e933808bd34918fd98eda3442483901ec123c8272733b960932e541d7b770"
+  },
+  {
+    "file": "zlib-1.3.2-1.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/zlib-1.3.2-1.src.tar.zst",
+    "sha256": "b3ec151674ce25015b16b28394d679ac0eedee03d02be33f93367c3a2b4d426d"
+  },
+  {
+    "file": "zstd-1.5.7-1.src.tar.zst",
+    "url": "https://repo.msys2.org/msys/sources/zstd-1.5.7-1.src.tar.zst",
+    "sha256": "19e11d517b005cba22d0f04969a74ffa08443429ff9dc80596d323b9483534f5"
+  }
+]

@@ -312,11 +312,11 @@ namespace MediaReviewer {
         readonly object scanGate=new object(); ScanRunner scan;
         public string StartScan(ScanOptions options) {
             if(options==null) throw new ArgumentNullException("options"); ScanOptions copy=options.Copy(); copy.Validate();
-            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before starting a scan."); string id=Guid.NewGuid().ToString(); scan=new ScanRunner(this,copy,id,false,copy.WorkerCount); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Preparing scan";s.CompletedUsers=0;s.TotalUsers=0;s.BytesRead=0;}); scan.Start(); return id; }
+            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || StegoAnalysisActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before starting a scan."); string id=Guid.NewGuid().ToString(); scan=new ScanRunner(this,copy,id,false,copy.WorkerCount); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Preparing scan";s.CompletedUsers=0;s.TotalUsers=0;s.BytesRead=0;}); scan.Start(); return id; }
         }
         public void ResumeScan(string id,int workers) {
             if(workers<1 || workers>8) throw new ArgumentException("Choose 1–8 workers");
-            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before resuming."); scan=new ScanRunner(this,null,id,true,workers); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Loading saved manifest";s.BytesRead=0;}); scan.Start(); }
+            lock(scanGate) { if(!Ready || Faulted || closing || reportActive || sourceConnectionBusy || DraftReviewActive || StegoAnalysisActive || (scan!=null && !scan.Finished)) throw new InvalidOperationException("Wait for the current scan or background work before resuming."); scan=new ScanRunner(this,null,id,true,workers); Update(s=>{s.RunningScan=true;s.CancelRequested=false;s.CompletedWithErrors=false;s.Error="";s.ScanId=id;s.Stage="Loading saved manifest";s.BytesRead=0;}); scan.Start(); }
         }
         public void CancelScan() { lock(scanGate) if(scan!=null && !scan.Finished) scan.Cancel(); }
         partial void StopScanner() { CancelScan(); }

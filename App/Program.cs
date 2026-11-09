@@ -47,15 +47,17 @@ namespace MediaReviewer {
         static int Run() {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
-            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion";
+            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--stego-source-worker";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
                 Native.Initialize(scratch);
+                if(mode=="--stego-source-worker" && args.Length==1)return StegoSource.Worker();
                 if(mode=="--preview-worker")return DecoderProgram.Run();
                 if(mode=="--draft-worker" && (args.Length==1 || args.Length==2 && (args[1]=="gemma" || args[1]=="gemma-vulkan")))return DraftModelWorker.Run(args.Length==2,args.Length==2 && args[1]=="gemma-vulkan");
                 if(mode=="--playback-worker")return PlaybackProxy.Worker();
                 MediaScratch.QueueRecovery();
+                if(mode=="--verify-stego" && args.Length==3)return StegoSmoke.Run(args[1],args[2]);
                 if(mode=="--verify-companion" && args.Length==2)return CompanionSmoke.Run(args[1]);
                 if(mode=="--verify-workflow" && args.Length==3)return WorkflowSmoke.Run(args[1],args[2]);
                 if(headless)return CommandLine.Run(args);

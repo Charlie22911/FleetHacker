@@ -1,0 +1,37 @@
+[
+  {
+    "file": "forwardable-1.4.0.gem",
+    "sha256": "f1cd40cc9812937980e1c76f1aa053660990a7c9b6a98fc37d945468afcce838",
+    "url": "https://rubygems.org/downloads/forwardable-1.4.0.gem"
+  },
+  {
+    "file": "iostruct-0.7.0.gem",
+    "sha256": "e93f2ffea3b79a0e1045f0e0bd3f202368d89c53b692878e693cf50603bae49c",
+    "url": "https://rubygems.org/downloads/iostruct-0.7.0.gem"
+  },
+  {
+    "file": "prime-0.1.4.gem",
+    "sha256": "4d755ebf7c2994a6f3a3fee0d072063be3fff2d4042ebff6cd5eebd4747a225e",
+    "url": "https://rubygems.org/downloads/prime-0.1.4.gem"
+  },
+  {
+    "file": "rainbow-3.1.1.gem",
+    "sha256": "039491aa3a89f42efa1d6dec2fc4e62ede96eb6acd95e52f1ad581182b79bc6a",
+    "url": "https://rubygems.org/downloads/rainbow-3.1.1.gem"
+  },
+  {
+    "file": "singleton-0.3.0.gem",
+    "sha256": "83ea1bca5f4aa34d00305ab842a7862ea5a8a11c73d362cb52379d94e9615778",
+    "url": "https://rubygems.org/downloads/singleton-0.3.0.gem"
+  },
+  {
+    "file": "zpng-0.4.6.gem",
+    "sha256": "40f4629f7dac4864662fa5cdfe7b410cc4bc8e72e271d39551f084291e64246e",
+    "url": "https://rubygems.org/downloads/zpng-0.4.6.gem"
+  },
+  {
+    "file": "zsteg-0.2.14.gem",
+    "sha256": "761ee35a8512630606946187ed1a3150c6ab30dd5e32cefe48ebb2b874190f6f",
+    "url": "https://rubygems.org/downloads/zsteg-0.2.14.gem"
+  }
+]

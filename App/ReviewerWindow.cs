@@ -112,7 +112,7 @@ namespace MediaReviewer {
             Click("VerifyButton",()=>Verify(Selected().Single().Record));
             Click("IdentityHistoryButton",()=>Work(engine.RequestIdentityHistory(Selected().Single().Record.GroupId),"Identity history",r=>ShowText("Identity history",r.Value)));
             Click("LogButton",()=>Queue(engine.RequestLog(),r=>{if(r.Success)ShowText("Log",r.Value);else Message(r.Error);}));
-            Click("CancelWorkButton",()=>{string active=draftTask??task;if(active!=null)engine.CancelOperation(active);});
+            Click("CancelWorkButton",()=>{string active=stegoTask??draftTask??task;if(active!=null)engine.CancelOperation(active);});
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
@@ -487,7 +487,7 @@ namespace MediaReviewer {
                 Guard(LoadQuickPreview);
                 Guard(LoadPanePreview);
             }
-            string activeOperation=draftTask??task;
+            string activeOperation=stegoTask??draftTask??task;
             var progress=activeOperation==null ? null : engine.GetOperationProgress(activeOperation);
             if(progress!=null)Text("ActivityText",progress.Stage+" · "+progress.Completed.ToString("N0")+(progress.Total.HasValue ? " / "+progress.Total.Value.ToString("N0") : "")+" "+progress.Unit);
             var bar=Get<ProgressBar>("ActivityProgress");
@@ -520,7 +520,7 @@ namespace MediaReviewer {
             int count=Selected().Length;
             Text("SelectionLabel",count+" selected");
             Button("CatalogButton").IsEnabled=!closing && !switchingCatalog && closingDatabase==null && !scanning && task==null && pending.Count==0 && (engine==null || engine.Ready || engine.Faulted);
-            bool drafting=ready && engine.DraftReviewActive;
+            bool drafting=ready && (engine.DraftReviewActive || engine.StegoAnalysisActive);
             Button("StartButton").IsEnabled=ready && !scanning && !drafting;
             Button("ResumeButton").IsEnabled=ready && !scanning && !drafting && status!=null && !String.IsNullOrEmpty(status.ResumeId);
             Button("CancelButton").IsEnabled=ready && scanning;
@@ -536,7 +536,7 @@ namespace MediaReviewer {
             Button("UndoReviewButton").IsEnabled=Button("QuickUndoButton").IsEnabled=canUndo;
             string undoTip=canUndo ? "Undo last review ("+undoStack[undoStack.Count-1].Items.Length+" item"+(undoStack[undoStack.Count-1].Items.Length==1 ? "" : "s")+") (Ctrl+Z)" : "Undo the last review decision in this session (Ctrl+Z)";
             Button("UndoReviewButton").ToolTip=Button("QuickUndoButton").ToolTip=undoTip;
-            Button("CancelWorkButton").Visibility=ready && (task!=null || draftTask!=null) ? Visibility.Visible : Visibility.Collapsed;
+            Button("CancelWorkButton").Visibility=ready && (stegoTask!=null || task!=null || draftTask!=null) ? Visibility.Visible : Visibility.Collapsed;
             Button("VaultButton").Content=ready && engine.VaultUnlocked ? "🔒 Lock originals" : "🔑 Unlock originals";
             UpdateWorkspace();
             UpdateStegoControls();

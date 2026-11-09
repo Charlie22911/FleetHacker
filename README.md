@@ -17,6 +17,10 @@ Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework
 
 Open the downloaded HTML directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own database format and opens Windows portable backups read-only. Use the Windows build for AI draft review and access to Evidence stored in Windows databases. [Browser usage and build instructions](browser/README.md)
 
+## Optional hidden data analysis
+
+An optional Windows [hidden data analysis package](steganography/README.md) adds original-byte PNG, JPEG and BMP checks with Aletheia color models, zsteg and native Binwalk. Place the matching companion beside the application to expose its controls. Saved results and JSON exports retain engine coverage and findings separately from compliance decisions. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
+
 ## Download Gemma for advanced AI review
 
 **Advanced AI review with Gemma 4 E2B requires both files below.** Download them separately and place them in the same folder as the FleetHacker executable on a local drive. Keep the original filenames. The pair is about 3.4 GB and FleetHacker checks both files when it loads the model.

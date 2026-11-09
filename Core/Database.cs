@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace MediaReviewer {
     public static partial class Catalog {
         public const int ApplicationId=0x4D435257;
-        public const int SchemaVersion=13;
+        public const int SchemaVersion=14;
         internal static string Now() { return DateTime.UtcNow.ToString("o",CultureInfo.InvariantCulture); }
         public static void Initialize(SqliteConnection db,bool create) {
             Initialize(db,create,CancellationToken.None,null);
@@ -20,7 +20,7 @@ namespace MediaReviewer {
                 if(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"))!=0) throw new InvalidDataException("Create requires an empty new database; an existing database is never overwritten.");
                 db.Script("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;");
                 try {
-                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
+                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+Migrations.Schema14+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
                     db.Execute("INSERT INTO app_info(key,value) VALUES('workspace_id',?)",Guid.NewGuid().ToString());
                     db.Execute("INSERT INTO app_info(key,value) VALUES('revision','0')"); db.Execute("COMMIT");
                 } catch { Rollback(db); throw; }
@@ -374,7 +374,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
         partial void StopScanner(); partial void JoinScanner();
         public void Dispose() {
             if(closed) return; closing=true;closeStage="Stopping scan workers and preserving resumable checkpoints";results.Close();StopScanner(); JoinScanner();
-            closeStage="Stopping background tasks";StopPlayback();StopOperations();StopGemma();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();
+            closeStage="Stopping background tasks";StopPlayback();StopStegoAnalysis();StopOperations();StopGemma();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();
             closeStage="Finishing queued writes and closing the database writer";if(Thread.CurrentThread!=writer) writer.Join();
             closeStage="Closing database readers";foreach(Thread reader in readers) if(Thread.CurrentThread!=reader) reader.Join();closeStage="Database closed";closed=true;
         }

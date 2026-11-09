@@ -22,11 +22,11 @@ namespace MediaReviewer {
         Thread operationThread;
         readonly Func<string,SqliteConnection> operationReader;
         bool operationReady;volatile Exception operationFailure;
-        public OperationProgress GetOperationProgress(string requestId) {lock(operationGate){OperationWork work;return operationStates.TryGetValue(requestId,out work) ? work.Progress.Copy() : null;}}
+        public OperationProgress GetOperationProgress(string requestId) {var stego=GetStegoProgress(requestId);if(stego!=null)return stego;lock(operationGate){OperationWork work;return operationStates.TryGetValue(requestId,out work) ? work.Progress.Copy() : null;}}
         // operationGate also owns the transition from a queued secret to an executing body.
         void CleanOperation(OperationWork work){var cleanup=work.Cleanup;work.Cleanup=null;if(cleanup!=null)cleanup();}
         void CancelWork(OperationWork work){if(work.Cancel==null)return;work.Cancel.Cancel();work.Progress.State="cancelling";if(!work.Started)CleanOperation(work);}
-        public void CancelOperation(string requestId) {lock(operationGate){OperationWork work;if(operationStates.TryGetValue(requestId,out work))CancelWork(work);}}
+        public void CancelOperation(string requestId) {if(CancelStego(requestId))return;lock(operationGate){OperationWork work;if(operationStates.TryGetValue(requestId,out work))CancelWork(work);}}
         internal string EnqueueOperation(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes=2048,Action cleanup=null) {return EnqueueOperationWithId(kind,body,retainedBytes,cleanup,null);}
         string EnqueueOperationWithId(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes,Action cleanup,string requestId) {
             if(!ready || closing || faulted){if(cleanup!=null)cleanup();throw new InvalidOperationException("Database is not ready");}
