@@ -17,7 +17,7 @@ namespace MediaReviewer {
         internal string RequestVideoPlayback(MediaRow row) {
             var selected=SourceSelection(row);
             lock(playbackGate){
-                if(!Ready || closing || faulted)throw new InvalidOperationException("The catalog is unavailable.");
+                if(!Ready || closing || faulted)throw new InvalidOperationException("The database is unavailable.");
                 if(pendingPlayback!=null)throw new InvalidOperationException("A video is already queued for playback.");
                 if(playbackThread==null){
                     var thread=new Thread(PlaybackMain) {IsBackground=true,Name="MediaReviewer playback preparation"};

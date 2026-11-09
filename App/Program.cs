@@ -47,7 +47,7 @@ namespace MediaReviewer {
         static int Run() {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
-            bool headless=CommandLine.IsHeadless(args);
+            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
@@ -56,6 +56,8 @@ namespace MediaReviewer {
                 if(mode=="--draft-worker" && (args.Length==1 || args.Length==2 && (args[1]=="gemma" || args[1]=="gemma-vulkan")))return DraftModelWorker.Run(args.Length==2,args.Length==2 && args[1]=="gemma-vulkan");
                 if(mode=="--playback-worker")return PlaybackProxy.Worker();
                 MediaScratch.QueueRecovery();
+                if(mode=="--verify-companion" && args.Length==2)return CompanionSmoke.Run(args[1]);
+                if(mode=="--verify-workflow" && args.Length==3)return WorkflowSmoke.Run(args[1],args[2]);
                 if(headless)return CommandLine.Run(args);
                 if(mode=="--self-test" && (args.Length==2 || args.Length==3))return Smoke.Run(args[1],args.Length==3 ? args[2] : null);
                 if(mode=="--verify-previews" && args.Length>=2)return Smoke.PreviewFiles(args.Skip(1));

@@ -11,6 +11,8 @@
     <DefaultItemExcludes>$(DefaultItemExcludes);.build/**;dist/**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Remove="steganography/**/*.cs;tests/**/*.cs" />
+    <EmbeddedResource Include=".build/Steganography.sha256" LogicalName="Steganography.sha256" Condition="Exists('.build/Steganography.sha256')" />
     <Reference Include="System.Web.Extensions" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Windows.Forms" />

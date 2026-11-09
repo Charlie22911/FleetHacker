@@ -19,13 +19,13 @@ namespace MediaReviewer {
         internal static void CheckStartupPrompt(Window dialog) {
             var buttons=((WrapPanel)((StackPanel)dialog.Content).Children[2]).Children.OfType<Button>().ToArray();
             Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCatalogButton","StartupLaterButton"}),
-                "The startup prompt must offer one catalog command and Later.");
+                "The startup prompt must offer one database command and Later.");
             dialog.Loaded+=(s,e)=>dialog.Dispatcher.BeginInvoke(new Action(()=>buttons[1].RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
         }
         internal static void CheckCatalogPath(string existing) {
             string unused=Path.Combine(Path.GetDirectoryName(existing),Guid.NewGuid().ToString("N")+".sqlite");
             Check(!ReviewerWindow.IsNewCatalogPath(existing) && ReviewerWindow.IsNewCatalogPath(unused),
-                "The combined catalog picker must open an existing path and create only at a new path.");
+                "The combined database picker must open an existing path and create only at a new path.");
         }
 
         internal static void CheckSidebarCommands(Window window) {
@@ -42,6 +42,7 @@ namespace MediaReviewer {
         }
 
         internal static void CheckShell(Window window,string snapshot) {
+            Check(((Button)window.FindName("SteganographyButton")).Visibility==Visibility.Collapsed,"Analysis controls must remain hidden when the optional package is absent.");
             CheckSidebarCommands(window);
             CheckCommandSections(window);
             var list=window.FindName("ReviewList") as ListView;
@@ -347,12 +348,12 @@ namespace MediaReviewer {
                 var first=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page;
                 Check(first.Total==1 && first.Rows.Count==1,"Scanned item is missing.");
                 Check(first.AiThreshold==7 && first.MarqoThreshold==7 && first.GemmaThreshold==55 && !first.GemmaCpuOnly,
-                    "A catalog without saved AI thresholds must use the measured defaults for each model.");
+                    "A database without saved AI thresholds must use the measured defaults for each model.");
                 var row=first.Rows.Single();id=row.GroupId;rootId=row.RootId;
                 Check(row.PreviewBytes!=null && row.PreviewWidth==1,"Thumbnail was not committed.");
                 var scanDefaults=new ScanOptions();var catalogDefaults=new ReviewPreferences();
                 Check(scanDefaults.IncludeRootFiles && scanDefaults.SniffRenamed && catalogDefaults.IncludeRootFiles && catalogDefaults.SniffRenamed,
-                    "New scans and catalogs must include root-level files and detect renamed media by default.");
+                    "New scans and databases must include root-level files and detect renamed media by default.");
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="AI_SUGGESTIONS"})).Page.Total==0,
                     "An unevaluated item must not appear in the AI suggestions queue.");
                 var draft=new FixtureDraftClassifier(.86);
@@ -468,7 +469,7 @@ namespace MediaReviewer {
                 }
                 var reopenedPage=Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="COMPLIANT"})).Page;
                 var saved=reopenedPage.Rows.Single();
-                Check(reopenedPage.AiThreshold==75 && reopenedPage.GemmaCpuOnly,"Reopen lost the catalog's saved AI settings.");
+                Check(reopenedPage.AiThreshold==75 && reopenedPage.GemmaCpuOnly,"Reopen lost the database's saved AI settings.");
                 Check(saved.GroupId==id && saved.Notes=="smoke test","Reopen lost the saved review.");
                 var preferences=Result(engine,engine.RequestPreferences()).Preferences;
                 Check(preferences.DefaultSourceRoot==root,"Reopen lost the default scan path.");
@@ -900,7 +901,7 @@ namespace MediaReviewer {
                 var page=Result(imported,imported.RequestPage(new PageRequest {Generation=1})).Page;
                 Check(page.Totals.Sum()>0,"The generated fixture did not produce review records.");
             }
-            Console.WriteLine("Final HTML database detected and imported into a separate, valid catalog.");return 0;
+            Console.WriteLine("Final HTML database detected and imported into a separate, valid database.");return 0;
         }
         internal static void SaveGallery(Window window,string output) {
             var view=(FrameworkElement)window.Content;

@@ -69,8 +69,10 @@ namespace MediaReviewer {
         readonly object inspectGate=new object();InspectWork pendingInspect;MediaLoadResult inspectResult;CancellationTokenSource activeInspect;
         readonly CancellationTokenSource stop=new CancellationTokenSource(); readonly Thread thumbnailThread,inspectThread;
         long latestInspect; volatile bool closing,closed;
+        readonly bool privateInspection;
         public bool Closed { get { return closed; } }
-        public MediaLoader() { thumbnailThread=new Thread(Thumbnails) { IsBackground=true,Name="MediaReviewer saved thumbnail loader" }; inspectThread=new Thread(Inspect) { IsBackground=true,Name="MediaReviewer source inspector" }; thumbnailThread.Start(); inspectThread.Start(); }
+        public MediaLoader():this(false){}
+        internal MediaLoader(bool independentInspection) { privateInspection=independentInspection;thumbnailThread=new Thread(Thumbnails) { IsBackground=true,Name="MediaReviewer saved thumbnail loader" }; inspectThread=new Thread(Inspect) { IsBackground=true,Name="MediaReviewer source inspector" }; thumbnailThread.Start(); inspectThread.Start(); }
         public bool QueueThumbnail(long id,long generation,byte[] bytes){return QueueThumbnail(id,0,generation,bytes);}
         public bool QueueThumbnail(long id,long content,long generation,byte[] bytes,long previewRevision=0) { if(closing) return false; if(bytes==null || bytes.Length>32768) throw new InvalidDataException("Saved thumbnail exceeds its bounded encoded size"); return thumbnails.TryAdd(new ThumbnailWork { Id=id,Content=content,Generation=generation,Bytes=bytes,PreviewRevision=previewRevision },bytes.Length+128); }
         public bool QueueInspect(MediaRow row,long generation,int side,bool useSavedPoster=false) {
@@ -103,6 +105,8 @@ namespace MediaReviewer {
             try { while(!stop.IsCancellationRequested) { ThumbnailWork work=thumbnails.Take(stop.Token,100); if(work==null) continue; var result=new MediaLoadResult { Kind="Thumbnail",GroupId=work.Id,ContentId=work.Content,Generation=work.Generation,PreviewRevision=work.PreviewRevision }; try { result.Image=Decode(work.Bytes,256,stop.Token); } catch(Exception error) { result.Error=error.Message; } Post(result); } } catch(OperationCanceledException) {}
         }
         void Inspect() {
+            DecoderHost own=null;
+            try{
             while(!stop.IsCancellationRequested){InspectWork work;CancellationTokenSource request;
                 lock(inspectGate){if(pendingInspect==null && !closing)Monitor.Wait(inspectGate,100);if(closing)break;work=pendingInspect;pendingInspect=null;if(work==null)continue;request=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);activeInspect=request;}
                 var result=new MediaLoadResult {Kind="Inspect",GroupId=work.Row.GroupId,ContentId=work.Row.ContentId,Generation=work.Generation,RequestedSide=work.Side};
@@ -110,10 +114,21 @@ namespace MediaReviewer {
                     if(work.Row.PreviewBytes!=null){
                         result.Image=Decode(work.Row.PreviewBytes,256,request.Token);
                         result.SourceWidth=result.Image.PixelWidth;result.SourceHeight=result.Image.PixelHeight;
-                    }else for(int attempt=0;;attempt++){try{var preview=Preview.CreateExpectedScoped(Catalog.PreviewSourcePath(work.Row.RootPath,work.Row.RelativePath),work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,work.Side,InspectionPlan.EncodedLimit,request.Token,work.Row.RootPath);request.Token.ThrowIfCancellationRequested();result.Image=Decode(preview.Bytes,work.Side);result.SourceWidth=preview.SourceWidth;result.SourceHeight=preview.SourceHeight;break;}catch(Exception error){if(!FileAccessNative.Transient(error) || attempt>=3)throw;if(request.Token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))request.Token.ThrowIfCancellationRequested();}}}
+                    }else for(int attempt=0;;attempt++){try{
+                        string path=Catalog.PreviewSourcePath(work.Row.RootPath,work.Row.RelativePath);
+                        PreviewResult preview;
+                        if(privateInspection){
+                            if(own==null)own=new DecoderHost(Native.RuntimeDirectory);
+                            if(Archives.IsPath(path))preview=Archives.WithPreviewFile(path,work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,request.Token,work.Row.RootPath,
+                                (file,stamp)=>own.CreateScoped(file,stamp.Size,stamp.ModifiedTicks,stamp.Identity,work.Side,InspectionPlan.EncodedLimit,request.Token,Native.RuntimeDirectory));
+                            else preview=own.CreateScoped(path,work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,work.Side,InspectionPlan.EncodedLimit,request.Token,work.Row.RootPath);
+                        }else preview=Preview.CreateExpectedScoped(path,work.Row.Size,work.Row.ModifiedTicks,work.Row.FileIdentity,work.Side,InspectionPlan.EncodedLimit,request.Token,work.Row.RootPath);
+                        request.Token.ThrowIfCancellationRequested();result.Image=Decode(preview.Bytes,work.Side);result.SourceWidth=preview.SourceWidth;result.SourceHeight=preview.SourceHeight;break;
+                    }catch(Exception error){if(!FileAccessNative.Transient(error) || attempt>=3)throw;if(request.Token.WaitHandle.WaitOne(attempt==0 ? 250 : attempt==1 ? 1000 : 3000))request.Token.ThrowIfCancellationRequested();}}}
                 catch(OperationCanceledException){}catch(Exception error){result.Error=error.Message;}
                 finally{lock(inspectGate){if(!closing && !request.IsCancellationRequested && work.Generation==latestInspect)inspectResult=result;activeInspect=null;request.Dispose();}}
             }
+            }finally{if(own!=null)own.Dispose();}
         }
         public void Dispose() { if(closed) return; closing=true; stop.Cancel();lock(inspectGate){pendingInspect=null;inspectResult=null;if(activeInspect!=null)activeInspect.Cancel();Monitor.PulseAll(inspectGate);}thumbnails.Close();output.Close();thumbnailThread.Join();inspectThread.Join();closed=true; }
         public void CloseAsync() { if(closing) return; closing=true; new Thread(Dispose) { IsBackground=true,Name="MediaReviewer preview shutdown" }.Start(); }

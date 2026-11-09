@@ -111,7 +111,8 @@ namespace MediaReviewer {
             Click("ListModeButton",()=>SetView(ReviewView.List));
             Click("ThumbnailsModeButton",()=>SetView(ReviewView.Thumbnails));
             Click("QuickModeButton",()=>OpenQuick(FocusedCard()));
-            Click("RefreshViewButton",()=>{view.Advance();refresh=true;foreach(var card in cards)card.ImageQueued=false;});
+            Click("SteganographyButton",ShowStegoPackage);
+            Click("RefreshViewButton",()=>{view.Advance();refresh=true;ResetPanePreview();foreach(var card in cards)card.ImageQueued=false;});
             Click("QueueSidebarButton",()=>{workspace.SidebarCollapsed=!workspace.SidebarCollapsed;UpdateWorkspace();});
             Click("TopControlsButton",()=>{workspace.TopCollapsed=!workspace.TopCollapsed;UpdateWorkspace();});
             Click("PreviewPaneButton",()=>{workspace.PreviewCollapsed=!workspace.PreviewCollapsed;UpdateWorkspace();});
@@ -332,7 +333,17 @@ namespace MediaReviewer {
         }
 
         void ReviewWorkspaceItems(string target) {
-            if(display!=ReviewView.Quick){Review(target,Selected());return;}
+            if(display!=ReviewView.Quick){
+                var chosen=Selected();
+                var continuation=chosen.Length==1 ? new ReviewContinuation {Generation=view.Current,SelectionRevision=selectionRevision,Position=cards.IndexOf(chosen[0]),NextId=cards.Skip(cards.IndexOf(chosen[0])+1).Where(c=>c.CanSelect).Select(c=>c.Record.GroupId).FirstOrDefault()} : null;
+                Review(target,chosen,r=>{
+                    if(!r.Success || continuation==null || !view.Accept(continuation.Generation) || selectionRevision!=continuation.SelectionRevision)return;
+                    if(target==BucketKeys[bucket] && continuation.NextId==0 && page<pageCount){NewPage(page+1);continuation.Generation=view.Current;continuation.Position=0;}
+                    reviewContinuation=continuation;
+                    if(continuation.NextId!=0 && cards.Any(c=>c.Record.GroupId==continuation.NextId))ContinueReviewSelection();
+                    refresh=true;
+                });return;
+            }
             var card=QuickCard();if(card==null || !card.CanSelect)return;
             long generation=view.Current;
             Review(target,new[]{card},r=>{
@@ -414,7 +425,10 @@ namespace MediaReviewer {
             Get<ListView>("ReviewList").Visibility=display==ReviewView.List ? Visibility.Visible : Visibility.Collapsed;
             Get<ScrollViewer>("GalleryScroll").Visibility=display==ReviewView.Thumbnails ? Visibility.Visible : Visibility.Collapsed;
             Get<Slider>("ThumbnailSize").Visibility=display==ReviewView.Thumbnails ? Visibility.Visible : Visibility.Collapsed;
-            var focus=FocusedCard();var preview=Get<FrameworkElement>("PreviewPane");preview.DataContext=focus;
+            var focus=FocusedCard();var preview=Get<FrameworkElement>("PreviewPane");
+            if(paneSource!=null && (focus==null || !SamePreviewSource(paneSource,focus.Record) || focus.Record.Status=="EVIDENCE" || focus.Record.SourceIsHistorical || workspace.PreviewCollapsed || display==ReviewView.Quick))ResetPanePreview();
+            preview.DataContext=focus;
+            Text("PaneSelectionStatus",focus!=null && Selected().Length==0 ? "Preview only — select an item to review" : "");
             bool showPreviewTab=display!=ReviewView.Quick;
             ShowPreviewPane(!workspace.PreviewCollapsed && showPreviewTab);
             Button("PreviewPaneButton").Visibility=showPreviewTab ? Visibility.Visible : Visibility.Collapsed;

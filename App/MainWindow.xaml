@@ -304,7 +304,7 @@
         <Slider x:Name="ThumbnailSize" Minimum="160" Maximum="320" Value="220" Visibility="Collapsed" AutomationProperties.Name="Thumbnail size"/>
       </StackPanel>
       <WrapPanel Visibility="Collapsed">
-        <Button x:Name="CatalogButton" Content="Open or create catalog…"/>
+        <Button x:Name="CatalogButton" Content="Open or create database…"/>
         <Button x:Name="MaintenanceButton" Content="Maintenance"/><Button x:Name="PreviewTasksButton" Content="Preview tasks"/>
         <Button x:Name="LogButton" Content="Log"/><Button x:Name="HelpButton" Content="Help"/>
         <Button x:Name="AboutButton" Content="About"/><Button x:Name="ThemeButton" Content="Appearance"/>
@@ -318,9 +318,9 @@
   <Grid Margin="10,6,12,10" Background="{DynamicResource PageBrush}">
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <DockPanel x:Name="TopHeaderBar" Grid.Row="0" Margin="0,0,0,4">
-      <Button x:Name="SettingsCogButton" DockPanel.Dock="Right" Content="⚙" Width="34" Height="34" Padding="0" FontSize="16" VerticalAlignment="Center" ToolTip="Settings, catalog, scan options, appearance, and tools"/>
+      <Button x:Name="SettingsCogButton" DockPanel.Dock="Right" Content="⚙" Width="34" Height="34" Padding="0" FontSize="16" VerticalAlignment="Center" ToolTip="Settings, database, scan options, appearance, and tools"/>
       <StackPanel x:Name="CompactQueues" DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,10,0"><TextBlock Text="Space" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4"/><ComboBox x:Name="ViewBox" Width="195" SelectedIndex="0" AutomationProperties.Name="Review queue"><ComboBoxItem Content="To be reviewed (0)"/><ComboBoxItem Content="Compliant (0)"/><ComboBoxItem Content="Non-compliant (0)"/><ComboBoxItem Content="Evidence (0)"/><ComboBoxItem Content="AI suggestions (0)"/></ComboBox></StackPanel>
-      <TextBlock x:Name="DatabaseLabel" Text="☀ Welcome · click ⚙ in the top right to open or create a catalog" Foreground="{DynamicResource MutedBrush}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="6,0,8,0" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
+      <TextBlock x:Name="DatabaseLabel" Text="☀ Welcome · click ⚙ in the top right to open or create a database" Foreground="{DynamicResource MutedBrush}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="6,0,8,0" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
     </DockPanel>
     <ScrollViewer x:Name="TopControls" Grid.Row="1" MaxHeight="340" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
     <StackPanel>
@@ -334,6 +334,7 @@
           <Button x:Name="ResumeButton" Content="▶ Resume" ToolTip="Pick up your saved scan right where it left off"/>
           <Button x:Name="CancelButton" Content="Pause scan"/>
           <Button x:Name="AiDraftButton" Content="AI draft check…" ToolTip="Run an offline draft check on saved previews or adjust the AI threshold"/>
+          <Button x:Name="SteganographyButton" Content="Hidden data…" Visibility="Collapsed" ToolTip="Analysis package status"/>
           <Button x:Name="ScanCogButton" Visibility="Collapsed" Content="⚙"/>
         </WrapPanel>
         <Expander x:Name="ScanSettingsExpander" Visibility="Collapsed" Header="Scan settings · Quick · 4 workers">
@@ -349,7 +350,7 @@
     </Border>
     <WrapPanel Margin="2,5,0,0">
       <TextBlock Text="🔍 Find" VerticalAlignment="Center" FontWeight="SemiBold" Margin="4"/>
-      <TextBox x:Name="SearchBox" Width="220" AutomationProperties.Name="Search catalog" ToolTip="Search by filename, path, reviewer, notes, or SHA-256 hash; press Enter or click Search"/>
+      <TextBox x:Name="SearchBox" Width="220" AutomationProperties.Name="Search database" ToolTip="Search by filename, path, reviewer, notes, or SHA-256 hash; press Enter or click Search"/>
       <Button x:Name="FilterButton" Content="Search" ToolTip="Apply your search, folder, type, and sort choices"/>
       <Button x:Name="ResetButton" Content="Show all" ToolTip="Clear all filters and show everything in first-found order"/>
     </WrapPanel>
@@ -498,7 +499,10 @@
             <Border CornerRadius="12" Background="{DynamicResource InsetBrush}" ClipToBounds="True">
               <Grid ClipToBounds="True">
                 <Image Source="{Binding Image}" Stretch="Uniform"/>
-                <TextBlock Text="{Binding Placeholder}" Visibility="{Binding PlaceholderVisibility}" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10" Foreground="{DynamicResource MutedBrush}"/>
+                <Image x:Name="PaneDetailImage" Stretch="Uniform"/>
+                <TextBlock Text="{Binding Placeholder}" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="10" Foreground="{DynamicResource MutedBrush}">
+                  <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding Source,ElementName=PaneDetailImage}" Value="{x:Null}"><Setter Property="Visibility" Value="{Binding PlaceholderVisibility}"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
+                </TextBlock>
                 <TextBlock Text="✨ Pick any item on the left to see a closer preview here." Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="14">
                   <TextBlock.Style><Style TargetType="TextBlock"><Setter Property="Visibility" Value="Collapsed"/><Style.Triggers><DataTrigger Binding="{Binding}" Value="{x:Null}"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers></Style></TextBlock.Style>
                 </TextBlock>
@@ -506,6 +510,8 @@
             </Border>
             <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"><StackPanel>
               <TextBlock Text="{Binding Name}" FontSize="15.5" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,8,0,2"/>
+              <TextBlock x:Name="PanePreviewStatus" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap"/>
+              <TextBlock x:Name="PaneSelectionStatus" Foreground="{DynamicResource MutedBrush}" TextWrapping="Wrap"/>
               <TextBlock Text="{Binding PathLabel}" TextWrapping="Wrap" Foreground="{DynamicResource MutedBrush}"/>
               <TextBlock Text="{Binding Info}" TextWrapping="Wrap" Margin="0,2,0,0"/><TextBlock Text="{Binding FingerprintLabel}" Foreground="{DynamicResource MutedBrush}"/>
               <TextBlock Text="{Binding ReviewerLabel}" TextWrapping="Wrap"/>
@@ -580,12 +586,12 @@
       <Border x:Name="EmptyPanel" Style="{StaticResource SurfacePanel}" Padding="28,24" VerticalAlignment="Top" MaxWidth="560" HorizontalAlignment="Center" Margin="0,28,0,0">
         <StackPanel>
           <TextBlock x:Name="EmptyTitle" Text="👋 Welcome to your review space" FontSize="20" FontWeight="SemiBold"/>
-          <TextBlock x:Name="EmptyText" Text="Open an existing catalog or start a fresh one on your computer using ⚙ in the top right corner. Your media folders can live on local drives, mapped drives, or shared network folders." Foreground="{DynamicResource MutedBrush}" FontSize="13.5" TextWrapping="Wrap" Margin="0,8,0,0"/>
+          <TextBlock x:Name="EmptyText" Text="Open an existing database or start a fresh one on your computer using ⚙ in the top right corner. Your media folders can live on local drives, mapped drives, or shared network folders." Foreground="{DynamicResource MutedBrush}" FontSize="13.5" TextWrapping="Wrap" Margin="0,8,0,0"/>
         </StackPanel>
       </Border>
     </Grid>
-    <WrapPanel x:Name="PaginationBar" Grid.Row="4" Margin="2,6"><TextBlock Text="Show per page" VerticalAlignment="Center" Margin="4"/><ComboBox x:Name="PageSizeBox" Width="75" SelectedIndex="2"><sys:Int32>20</sys:Int32><sys:Int32>40</sys:Int32><sys:Int32>60</sys:Int32><sys:Int32>100</sys:Int32><sys:Int32>200</sys:Int32></ComboBox><Button x:Name="PreviousButton" Content="← Earlier"/><TextBox x:Name="PageBox" Width="52" Text="1"/><Button x:Name="GoButton" Content="Jump"/><Button x:Name="NextButton" Content="More →"/><TextBlock x:Name="PageLabel" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" Margin="10,0" Text="No catalog open yet"/></WrapPanel>
-    <Border x:Name="StatusPanel" Grid.Row="5" Style="{StaticResource SurfacePanel}" Padding="12,8"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="ActivityText" Text="☀ Ready when you are — open or create a catalog to start" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><ProgressBar x:Name="ActivityProgress" Height="6" Visibility="Collapsed" Margin="0,5,0,2" Minimum="0" Maximum="100" Foreground="{DynamicResource PrimaryBrush}" Background="{DynamicResource InsetBrush}" BorderThickness="0"/><TextBlock x:Name="MessageText" Text="Tip: Quick scan checks everyday photos &amp; videos. Deep scan also checks RAW camera files." Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/><DockPanel Height="22"><Button x:Name="RetryPreferencesButton" DockPanel.Dock="Right" Content="Retry preferences" Visibility="Hidden" Padding="6,1" Margin="0" MinHeight="20" Height="20"/><TextBlock x:Name="PreferencesText" Text="Your workspace preferences load automatically with your catalog." Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" FontSize="11" TextTrimming="CharacterEllipsis"/></DockPanel></StackPanel><Button Grid.Column="1" x:Name="CancelWorkButton" Content="Stop task" Visibility="Collapsed" VerticalAlignment="Center"/></Grid></Border>
+    <WrapPanel x:Name="PaginationBar" Grid.Row="4" Margin="2,6"><TextBlock Text="Show per page" VerticalAlignment="Center" Margin="4"/><ComboBox x:Name="PageSizeBox" Width="75" SelectedIndex="2"><sys:Int32>20</sys:Int32><sys:Int32>40</sys:Int32><sys:Int32>60</sys:Int32><sys:Int32>100</sys:Int32><sys:Int32>200</sys:Int32></ComboBox><Button x:Name="PreviousButton" Content="← Earlier"/><TextBox x:Name="PageBox" Width="52" Text="1"/><Button x:Name="GoButton" Content="Jump"/><Button x:Name="NextButton" Content="More →"/><TextBlock x:Name="PageLabel" VerticalAlignment="Center" FontWeight="SemiBold" Foreground="{DynamicResource MutedBrush}" Margin="10,0" Text="No database open yet"/></WrapPanel>
+    <Border x:Name="StatusPanel" Grid.Row="5" Style="{StaticResource SurfacePanel}" Padding="12,8"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><StackPanel><TextBlock x:Name="ActivityText" Text="☀ Ready when you are — open or create a database to start" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/><ProgressBar x:Name="ActivityProgress" Height="6" Visibility="Collapsed" Margin="0,5,0,2" Minimum="0" Maximum="100" Foreground="{DynamicResource PrimaryBrush}" Background="{DynamicResource InsetBrush}" BorderThickness="0"/><TextBlock x:Name="MessageText" Text="Tip: Quick scan checks everyday photos &amp; videos. Deep scan also checks RAW camera files." Foreground="{DynamicResource MutedBrush}" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/><DockPanel Height="22"><Button x:Name="RetryPreferencesButton" DockPanel.Dock="Right" Content="Retry preferences" Visibility="Hidden" Padding="6,1" Margin="0" MinHeight="20" Height="20"/><TextBlock x:Name="PreferencesText" Text="Your workspace preferences load automatically with your database." Foreground="{DynamicResource MutedBrush}" VerticalAlignment="Center" FontSize="11" TextTrimming="CharacterEllipsis"/></DockPanel></StackPanel><Button Grid.Column="1" x:Name="CancelWorkButton" Content="Stop task" Visibility="Collapsed" VerticalAlignment="Center"/></Grid></Border>
   </Grid>
   </DockPanel>
     <Border x:Name="ShutdownPanel" Panel.ZIndex="100" Background="{DynamicResource PageBrush}" Visibility="Collapsed" Focusable="True" KeyboardNavigation.TabNavigation="Cycle">

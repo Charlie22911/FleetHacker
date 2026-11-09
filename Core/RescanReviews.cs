@@ -60,7 +60,7 @@ namespace MediaReviewer {
             if(!check.Item1 && !check.Item2)return record;
             FileRecord candidate=record;
             if(sampled){
-                engine.Update(s=>s.Stage="Checking full identity against the catalog: "+record.RelativePath);
+                engine.Update(s=>s.Stage="Checking full identity against the database: "+record.RelativePath);
                 var full=new FileRecord {RootId=record.RootId,ScanId=record.ScanId,JobId=record.JobId,UserOrdinal=record.UserOrdinal,RelativePath=record.RelativePath,Name=record.Name,Extension=record.Extension};
                 FileAccessNative.FingerprintScoped(Full(record.RelativePath),full,buffer,token,n=>engine.Update(s=>{s.BytesRead+=n;s.LastProgressUtc=DateTime.UtcNow;}),0,FingerprintPolicy.Full(),options.RootPath);
                 if(full.Size!=record.Size || full.ModifiedTicks!=record.ModifiedTicks || full.FileIdentity!=record.FileIdentity)throw new FileChangedException("Source changed between quick and full matching; retry must reopen it.");

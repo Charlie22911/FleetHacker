@@ -56,13 +56,13 @@ async function openWindowsBackup(file) {
   const header = new DataView(await file.slice(0, 100).arrayBuffer());
   const magic = new TextDecoder().decode(new Uint8Array(header.buffer, 0, 16));
   if (magic !== 'SQLite format 3\0' || header.getUint32(68) !== windowsCatalogApplicationId) {
-    throw new Error('Choose a backup from the Windows reviewer. Open browser catalogs from the main reviewer.');
+    throw new Error('Choose a backup from the Windows reviewer. Open browser databases from the main reviewer.');
   }
   if (header.getUint8(18) !== 1 || header.getUint8(19) !== 1) {
-    throw new Error('This catalog uses WAL. In the Windows reviewer, use Maintenance → Portable backup and select the new file.');
+    throw new Error('This database uses WAL. In the Windows reviewer, use Maintenance → Portable backup and select the new file.');
   }
   if (header.getUint32(60) !== windowsCatalogSchema) {
-    throw new Error('This viewer supports Windows schema ' + windowsCatalogSchema + '. Open the catalog in the current Windows reviewer and create a new portable backup.');
+    throw new Error('This viewer supports Windows schema ' + windowsCatalogSchema + '. Open the database in the current Windows reviewer and create a new portable backup.');
   }
   const pageSize = header.getUint16(16) === 1 ? 65536 : header.getUint16(16);
   if (pageSize < 512 || pageSize > 65536 || (pageSize & (pageSize - 1)) ||

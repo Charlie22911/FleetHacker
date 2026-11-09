@@ -40,6 +40,13 @@ namespace MediaReviewer {
         ReviewPreferences savedPreferences;
         bool closing,allowClose,refresh,loadedPreferences,waitingOnClosePreference,switchingCatalog;
         long pageCommitVersion;
+        long selectionRevision;
+        bool advancingSelection;
+        ReviewContinuation reviewContinuation;
+        sealed class ReviewContinuation {
+            internal long Generation,SelectionRevision,NextId;
+            internal int Position;
+        }
         string pageSearch="",pageFolder="";
         DateTime? databaseClosedAt;
         string gemmaCriteria="";
@@ -109,7 +116,7 @@ namespace MediaReviewer {
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
-            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and catalog tools. Use the arrows at the panel edges to collapse or reopen them. Drag the thin preview divider immediately to the left of its arrow to resize it.\n\nDouble-click an item to open Inspect without changing the view. Choose Quick Review in the sidebar for directional review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
+            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and database tools. Use the arrows at the panel edges to collapse or reopen them. Drag the thin preview divider immediately to the left of its arrow to resize it.\n\nDouble-click an item to open Inspect without changing the view. Choose Quick Review in the sidebar for directional review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
             Click("AboutButton",About);
             SetUpWorkspace(persistWorkspace);
             SetUpCommandSections();
@@ -146,8 +153,8 @@ namespace MediaReviewer {
 
         void ChooseDatabase() {
             var picker=new OpenFileDialog {
-                Title="Select an existing catalog or enter a new filename",
-                Filter="Catalogs and Evidence packages (*.sqlite;*.db;*.mcrevidence)|*.sqlite;*.db;*.mcrevidence|All files (*.*)|*.*",
+                Title="Select an existing database or enter a new filename",
+                Filter="Databases and Evidence packages (*.sqlite;*.db;*.mcrevidence)|*.sqlite;*.db;*.mcrevidence|All files (*.*)|*.*",
                 CheckFileExists=false, CheckPathExists=true, DefaultExt=".sqlite"
             };
             if(picker.ShowDialog(Window)!=true)return;
@@ -159,7 +166,7 @@ namespace MediaReviewer {
         internal static bool IsNewCatalogPath(string path) {
             try {
                 if((File.GetAttributes(Paths.Io(path)) & FileAttributes.Directory)!=0)
-                    throw new ArgumentException("Select a catalog file or enter a new filename.");
+                    throw new ArgumentException("Select a database file or enter a new filename.");
                 return false;
             } catch(FileNotFoundException) { return true; }
         }
@@ -170,13 +177,13 @@ namespace MediaReviewer {
             var old=engine;string save=SavePreferences(old);
             if(save!=null){
                 string signature=options.Signature;
-                switchingCatalog=true;Message("Saving preferences before changing catalogs…");UpdateControls();
+                switchingCatalog=true;Message("Saving preferences before changing databases…");UpdateControls();
                 Queue(save,r=>{
                     switchingCatalog=false;
                     if(r.Success)preferencesSignature=signature;
                     if(closing){if(r.Success)SaveBeforeClose();else PreferenceCloseFailed(r.Error);return;}
                     if(r.Success)SwitchCatalog(old,path,create);
-                    else Message("Could not save preferences. The current catalog is still open. "+r.Error);
+                    else Message("Could not save preferences. The current database is still open. "+r.Error);
                 });
                 return;
             }
@@ -310,13 +317,14 @@ namespace MediaReviewer {
                 ResetQuickPreview();
             }
             Get<Border>("EmptyPanel").Visibility=cards.Count==0 ? Visibility.Visible : Visibility.Collapsed;
+            ContinueReviewSelection();
             bool filtered=!String.IsNullOrWhiteSpace(pageSearch) || !String.IsNullOrWhiteSpace(pageFolder) || !String.IsNullOrEmpty(Tag("TypeBox")) || !String.IsNullOrEmpty(Tag("SmartFilterBox"));
             Text("EmptyTitle",bucket==3 && filtered ? "🔒 Evidence details require unlock" : "🎉 All clear in this view!");
             Text("EmptyText",bucket==3 && filtered ? "Clear search and filters to browse Evidence items. Unlock a saved original to view its authenticated capture details." : "Nothing matches right now — try scanning a folder, switching spaces on the left, or clearing your filters.");
-            if(bucket==4 && cards.Count==0){Text("EmptyTitle","No matching AI suggestions");Text("EmptyText","Run an AI draft check on your catalog, adjust the threshold, or clear the active filters.");}
+            if(bucket==4 && cards.Count==0){Text("EmptyTitle","No matching AI suggestions");Text("EmptyText","Run an AI draft check on your database, adjust the threshold, or clear the active filters.");}
         }
 
-        void ClearCards(){CancelQuickGesture();ResetQuickPreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
+        void ClearCards(){CancelQuickGesture();ResetQuickPreview();ResetPanePreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
         void Remove(CardItem card){
             int index=cards.IndexOf(card);
             if(index<0)return;
@@ -327,7 +335,19 @@ namespace MediaReviewer {
             }
             card.PropertyChanged-=CardChanged;cards.RemoveAt(index);
         }
-        void CardChanged(object sender,PropertyChangedEventArgs e){if((e.PropertyName=="IsSelected" || e.PropertyName=="CanSelect") && !selection.Updating)UpdateControls();}
+        void CardChanged(object sender,PropertyChangedEventArgs e){
+            if(e.PropertyName=="IsSelected" && !advancingSelection){selectionRevision++;reviewContinuation=null;}
+            if((e.PropertyName=="IsSelected" || e.PropertyName=="CanSelect") && !selection.Updating)UpdateControls();
+        }
+        void ContinueReviewSelection(){
+            var continuation=reviewContinuation;reviewContinuation=null;
+            if(continuation==null || !view.Accept(continuation.Generation) || selectionRevision!=continuation.SelectionRevision || display==ReviewView.Quick)return;
+            var next=cards.FirstOrDefault(c=>c.Record.GroupId==continuation.NextId && c.CanSelect)??cards.Skip(Math.Min(continuation.Position,Math.Max(0,cards.Count-1))).FirstOrDefault(c=>c.CanSelect);
+            if(next==null)return;
+            advancingSelection=true;try{foreach(var card in cards)card.IsSelected=ReferenceEquals(card,next);}finally{advancingSelection=false;}
+            if(display==ReviewView.List)Get<ListView>("ReviewList").ScrollIntoView(next);
+            else {var tile=Get<ItemsControl>("CardList").ItemContainerGenerator.ContainerFromItem(next) as FrameworkElement;if(tile!=null)tile.BringIntoView();}
+        }
         void CardClick(object sender,RoutedEventArgs e) {
             var button=e.OriginalSource as Button;var card=button==null ? null : button.DataContext as CardItem;
             if(card==null || !Ready)return;
@@ -370,7 +390,9 @@ namespace MediaReviewer {
             Queue(id,r=>{
                 if(task==id)task=null;
                 if(r.Success)pageCommitVersion++;
-                foreach(CardItem card in chosen){card.IsPending=false;if(r.Success){card.IsSelected=false;if(view.Accept(generation) && destination!=BucketKeys[bucket])Remove(card);}}
+                advancingSelection=true;
+                try{foreach(CardItem card in chosen){card.IsPending=false;if(r.Success){card.IsSelected=false;if(view.Accept(generation) && destination!=BucketKeys[bucket])Remove(card);}}}
+                finally{advancingSelection=false;}
                 Message(r.Success ? "Review saved." : "Review failed. Selection retained. "+r.Error);
                 if(destination=="EVIDENCE" && r.GroupIds!=null)
                     foreach(var window in ordinaryDetails.Where(pair=>r.GroupIds.Contains(pair.Value)).Select(pair=>pair.Key).ToArray())
@@ -435,6 +457,7 @@ namespace MediaReviewer {
 
         void Tick() {
             if(closing){ShutdownTick();return;}
+            TickStegoPackage();
             if(engine==null)return;
             status=engine.Status;
             Text("ActivityText",status.RunningScan ? String.Format("{0} · user {1}/{2} · {3:N0}/{4:N0} files processed · {5:N0} errors · {6:N0} queued · WAL {7:N1} MiB",
@@ -455,12 +478,14 @@ namespace MediaReviewer {
                 CardItem card=cards.FirstOrDefault(c=>c.Record.GroupId==media.GroupId && c.Record.ContentId==media.ContentId && c.Record.PreviewRevision==media.PreviewRevision);
                 if(card!=null){card.SetImage(media.Image,media.Error);if(media.Image!=null)card.Record.PreviewBytes=null;}
             }
+            DrainPanePreview();
             var focus=FocusedCard();
             IEnumerable<CardItem> toDecode=display==ReviewView.Thumbnails ? (IEnumerable<CardItem>)cards : focus==null ? new CardItem[0] : new[]{focus};
             foreach(CardItem card in toDecode)if(card.CanLoadImage){if(!loader.QueueThumbnail(card.Record.GroupId,card.Record.ContentId,view.Current,card.Record.PreviewBytes,card.Record.PreviewRevision))break;card.ImageQueued=true;}
             if(Ready){
                 if(gemmaSettingsLoaded)engine.ConfigureGemma(gemmaAvailable,gemmaCpuOnly,gemmaCriteria);
                 Guard(LoadQuickPreview);
+                Guard(LoadPanePreview);
             }
             string activeOperation=draftTask??task;
             var progress=activeOperation==null ? null : engine.GetOperationProgress(activeOperation);
@@ -514,6 +539,7 @@ namespace MediaReviewer {
             Button("CancelWorkButton").Visibility=ready && (task!=null || draftTask!=null) ? Visibility.Visible : Visibility.Collapsed;
             Button("VaultButton").Content=ready && engine.VaultUnlocked ? "🔒 Lock originals" : "🔑 Unlock originals";
             UpdateWorkspace();
+            UpdateStegoControls();
         }
 
         void Closing(object sender,CancelEventArgs args) {
@@ -524,6 +550,8 @@ namespace MediaReviewer {
             CloseDatabaseWindows();
             Get<Border>("ShutdownPanel").Visibility=Visibility.Visible;
             loader.CloseAsync();
+            StopStegoPackage();
+            ResetPanePreview();paneLoader.CloseAsync();
             if(switchingCatalog){waitingOnClosePreference=true;Text("ShutdownStage","Waiting for the pending preference save…");}
             else SaveBeforeClose();
         }
@@ -553,6 +581,8 @@ namespace MediaReviewer {
             if(closingDatabase!=null || waitingOnClosePreference)return;
             if(engine!=null && !engine.Closed){if(!String.IsNullOrEmpty(engine.CloseStage))Text("ShutdownStage",engine.CloseStage);return;}
             if(!loader.Closed){Text("ShutdownStage","Database closed. Stopping preview workers…");return;}
+            if(!paneLoader.Closed)return;
+            if(stegoProbe!=null && !stegoProbe.IsCompleted)return;
             if(engine!=null){
                 if(!databaseClosedAt.HasValue){databaseClosedAt=DateTime.UtcNow;Text("ShutdownStage","Database closed. Committed work is saved.");Get<ProgressBar>("ShutdownProgress").IsIndeterminate=false;Get<ProgressBar>("ShutdownProgress").Value=100;return;}
                 if((DateTime.UtcNow-databaseClosedAt.Value).TotalMilliseconds<550)return;
@@ -560,6 +590,6 @@ namespace MediaReviewer {
             timer.Stop();allowClose=true;Window.Close();
         }
 
-        public void Dispose(){timer.Stop();selection.Dispose();if(!loader.Closed)loader.Dispose();if(engine!=null && !engine.Closed)engine.Dispose();}
+        public void Dispose(){timer.Stop();selection.Dispose();if(!loader.Closed)loader.Dispose();if(!paneLoader.Closed)paneLoader.Dispose();DisposeStegoPackage();if(engine!=null && !engine.Closed)engine.Dispose();}
     }
 }

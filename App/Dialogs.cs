@@ -49,9 +49,9 @@ namespace MediaReviewer {
             var dialog=Dialog("Welcome to Media Review",panel,525,250);
             dialog.Icon=Window.Icon;dialog.ShowInTaskbar=false;dialog.ResizeMode=ResizeMode.NoResize;
             panel.Children.Add(new TextBlock {Text="☀ Welcome to Media Review",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,8)});
-            panel.Children.Add(Label("Pick an existing catalog to jump right back in, or type a new filename on your computer to start a fresh one."));
+            panel.Children.Add(Label("Pick an existing database to jump right back in, or type a new filename on your computer to start a fresh one."));
             var actions=Bar();panel.Children.Add(actions);
-            var open=ActionButton("📂 Open or create catalog…",()=>dialog.DialogResult=true);
+            var open=ActionButton("📂 Open or create database…",()=>dialog.DialogResult=true);
             open.Name="StartupCatalogButton";open.IsDefault=true;actions.Children.Add(open);
             var later=ActionButton("Maybe later",dialog.Close);later.Name="StartupLaterButton";later.IsCancel=true;actions.Children.Add(later);
             if(beforeShow!=null)beforeShow(dialog);
@@ -201,13 +201,13 @@ namespace MediaReviewer {
         void PopulateMaintenanceItems(ItemsControl menu) {
             Menu(menu,"💾 Portable backup…",()=>{string path=SaveFile("SQLite database (*.sqlite)|*.sqlite","Media Review Backup.sqlite");if(path!=null)Work(engine.RequestBackup(path),"Backup");});
             Menu(menu,"✓ Check database integrity",()=>Work(engine.RequestIntegrity(),"Integrity check"));
-            Menu(menu,"🧹 Compact and clean up staging data",()=>Work(engine.RequestDatabaseCleanup(),"Catalog cleanup"));
+            Menu(menu,"🧹 Compact and clean up staging data",()=>Work(engine.RequestDatabaseCleanup(),"Database cleanup"));
             Menu(menu,"📏 Retention limits…",()=>Work(engine.RequestOriginalLimits(),"Read retention limits",r=>RetentionLimits(EvidenceFormat.Json().Deserialize<OriginalStorageLimits>(r.Value))));
             Menu(menu,"🔑 Change originals password…",ChangePassword);
             Menu(menu,"📌 Use current source path as default",()=>ChangeDefaultSource(Box("SourceBox").Text.Trim()));
             Menu(menu,"✖ Clear default source path",()=>ChangeDefaultSource(""));
             Menu(menu,"🔗 Sources / reconnect…",ManageSources);
-            Menu(menu,"📁 Open catalog folder",()=>System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.GetDirectoryName(engine.DatabasePath)){UseShellExecute=true}));
+            Menu(menu,"📁 Open database folder",()=>System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(Path.GetDirectoryName(engine.DatabasePath)){UseShellExecute=true}));
             Menu(menu,"🔄 Reconnect all sources…",()=>{
                 string path=PromptSource();
                 if(path!=null)Work(engine.RequestReconnectAll(path),"Reconnect all sources");
@@ -391,7 +391,7 @@ namespace MediaReviewer {
 
         internal void ShowSettingsCogMenu(Button target) {
             var menu=CreateThemedMenu();
-            var openCatalog=new MenuItem {Header="📂 Open or create catalog…",IsEnabled=Button("CatalogButton").IsEnabled};
+            var openCatalog=new MenuItem {Header="📂 Open or create database…",IsEnabled=Button("CatalogButton").IsEnabled};
             openCatalog.Click+=(s,e)=>Guard(ChooseDatabase);
             menu.Items.Add(openCatalog);
             menu.Items.Add(new Separator());

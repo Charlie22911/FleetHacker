@@ -163,7 +163,7 @@ namespace MediaReviewer {
         }
 
         internal string GemmaStatus {
-            get{lock(scanGate)return gemmaSession==null ? "Gemma will load when the catalog is ready." : gemmaSession.Status;}
+            get{lock(scanGate)return gemmaSession==null ? "Gemma will load when the database is ready." : gemmaSession.Status;}
         }
 
         GemmaSession OpenGemmaSession(bool cpuOnly,string criteria,bool retryFailed=false){

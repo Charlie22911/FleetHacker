@@ -346,7 +346,7 @@ namespace MediaReviewer {
             ReviewerEngine sourceEngine=null;
             string request=null;
             return new VideoPlaybackControls(viewport,complete=>{
-                if(!Ready)throw new InvalidOperationException("The catalog is unavailable.");
+                if(!Ready)throw new InvalidOperationException("The database is unavailable.");
                 var catalog=engine;
                 string id=catalog.RequestVideoPlayback(row);
                 sourceEngine=catalog;request=id;

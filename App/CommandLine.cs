@@ -56,10 +56,10 @@ namespace MediaReviewer {
                 return 0;
             }
             if(args.Length==2 && args[0]=="--create-database"){
-                using(var engine=ReviewerEngine.Open(args[1],true)){AwaitReady(engine);Console.WriteLine("Created catalog · "+engine.DatabasePath);}return 0;
+                using(var engine=ReviewerEngine.Open(args[1],true)){AwaitReady(engine);Console.WriteLine("Created database · "+engine.DatabasePath);}return 0;
             }
             if(args.Length==3 && args[0]=="--import-html"){
-                using(var engine=ReviewerEngine.ImportHtml(args[1],args[2])){AwaitReady(engine);Console.WriteLine("Imported HTML catalog · "+engine.DatabasePath);}return 0;
+                using(var engine=ReviewerEngine.ImportHtml(args[1],args[2])){AwaitReady(engine);Console.WriteLine("Imported HTML database · "+engine.DatabasePath);}return 0;
             }
             if(args.Length<4 || args[0]!="--database")throw new ArgumentException("Invalid command. Use --help for supported arguments.");
             var options=ParseScan(args.Skip(2).ToArray());
@@ -72,7 +72,7 @@ namespace MediaReviewer {
                     if(options.Resume==null)Console.WriteLine("Scan · "+engine.StartScan(options.Scan));
                     else {
                         string id=options.Resume=="latest" ? engine.Status.ResumeId : options.Resume;
-                        if(String.IsNullOrEmpty(id))throw new InvalidOperationException("No interrupted scan is available in this catalog.");
+                        if(String.IsNullOrEmpty(id))throw new InvalidOperationException("No interrupted scan is available in this database.");
                         engine.ResumeScan(id,options.Scan.WorkerCount);Console.WriteLine("Resuming scan · "+id);
                     }
                     var elapsed=Stopwatch.StartNew();long next=0;bool requested=false;
@@ -122,7 +122,7 @@ namespace MediaReviewer {
 
         static void AwaitReady(ReviewerEngine engine) {
             while(!engine.Ready && !engine.Faulted && !engine.Closed)Thread.Sleep(100);
-            if(!engine.Ready)throw new IOException(String.IsNullOrEmpty(engine.Status.Error) ? "The catalog did not open." : engine.Status.Error);
+            if(!engine.Ready)throw new IOException(String.IsNullOrEmpty(engine.Status.Error) ? "The database did not open." : engine.Status.Error);
         }
 
         static void VerifyDependencies() {

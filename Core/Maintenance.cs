@@ -55,7 +55,7 @@ namespace MediaReviewer {
                     w.Script("PRAGMA wal_checkpoint(PASSIVE); PRAGMA optimize;");
                     return null;
                 });
-                return "Catalog cleanup complete ("+cleaned+" stale staging records removed; WAL checkpointed and query planner optimized).";
+                return "Database cleanup complete ("+cleaned+" stale staging records removed; WAL checkpointed and query planner optimized).";
             },"Wait for the current scan or report to finish before cleaning up staging data."));
         }
         public string RequestDiscardIdentityRun(string runId) {
