@@ -21,7 +21,7 @@ namespace MediaReviewer {
                 bool closingPackage=false,warningShown=false;
                 Action clear=()=>{details.Clear();image.Source=null;};
                 Action<Action> submit=action=>{try{action();}catch(Exception error){statusLine.Text=error.Message;}};
-                var unlock=ActionButton("Unlock",()=>submit(()=>{byte[] password=Password("Unlock protected package","Enter the originals password used to protect this package.",false);if(password!=null){list.ItemsSource=null;clear();session.RequestUnlock(password);}}));
+                var unlock=ActionButton("Unlock",()=>submit(()=>{byte[] password=Password("Unlock protected package","Enter the originals password used to protect this package.",false);if(password!=null){bool submitted=false;try{list.ItemsSource=null;clear();session.RequestUnlock(password);submitted=true;}finally{if(!submitted)Array.Clear(password,0,password.Length);}}}));
                 var relock=ActionButton("Lock",()=>submit(()=>{clear();list.ItemsSource=null;session.RequestLock();}));
                 var cancel=ActionButton("Cancel task",()=>{clear();session.Cancel();});
                 var export=ActionButton("Export original…",()=>submit(()=>{

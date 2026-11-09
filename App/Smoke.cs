@@ -156,11 +156,14 @@ namespace MediaReviewer {
             string previousSource=source.Text;
             ((Button)window.FindName("PaneDetailsButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             var details=window.OwnedWindows.OfType<Window>().Single(w=>w.Title=="Item details and notes");
+            TextBox notes=null;string originalNotes=null;
             try {
                 var body=(DockPanel)details.Content;
                 var locations=body.Children.OfType<DockPanel>().Single().Children.OfType<ListView>().Single();
-                var notes=body.Children.OfType<StackPanel>().Single().Children.OfType<TextBox>().Last();
-                WaitForWindow(()=>locations.Items.Count==1);
+                var top=(StackPanel)body.Children.OfType<ScrollViewer>().Single().Content;
+                var noteSection=top.Children.OfType<Expander>().Single(section=>Convert.ToString(section.Header).StartsWith("Notes"));
+                notes=((StackPanel)noteSection.Content).Children.OfType<TextBox>().Single();
+                WaitForWindow(()=>locations.Items.Count==1);originalNotes=notes.Text;
                 notes.Text="Unsaved notes during rescan";
                 string copy=Path.Combine(fixtureRoot,"example.user","rescan-copy.png");
                 File.Copy(original,copy);
@@ -170,7 +173,7 @@ namespace MediaReviewer {
                 Check(locations.Items.OfType<LocationRow>().Any(location=>location.FullPath==copy && !location.OtherCard),
                     "The open details window did not show the new same-root copy.");
                 Check(notes.Text=="Unsaved notes during rescan","Refreshing locations must preserve an unsaved notes draft.");
-            } finally {details.Close();source.Text=previousSource;}
+            } finally {if(notes!=null)notes.Text=originalNotes??"";details.Close();source.Text=previousSource;}
         }
         static void WaitForWindow(Func<bool> condition,string failure="Timed out waiting for Item details to refresh recorded locations.") {
             var frame=new DispatcherFrame();
@@ -808,7 +811,7 @@ namespace MediaReviewer {
             }
             foreach(bool sampled in new[]{false,true})using(var engine=ReviewerEngine.Open(Path.Combine(directory,sampled ? "duplicate-candidates.sqlite" : "duplicates.sqlite"),true)){
                 Wait(()=>engine.Ready || engine.Faulted);Check(engine.Ready,engine.Status.Error);
-                var policy=sampled ? new FingerprintPolicy {ThresholdBytes=0} : FingerprintPolicy.Full();
+                var policy=sampled ? new FingerprintPolicy {Mode="Sampled",ThresholdBytes=0} : FingerprintPolicy.Full();
                 engine.StartScan(new ScanOptions {RootPath=first,Extensions=new[]{"png"},WorkerCount=1,FingerprintPolicy=policy});
                 Wait(()=>!engine.Status.RunningScan);
                 var original=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page.Rows.Single();
@@ -822,8 +825,8 @@ namespace MediaReviewer {
                 var locations=page.Rows.Concat(next.Rows).ToArray();
                 Check(!next.HasMore && locations.Single(x=>!x.OtherCard).RootPath==first &&
                     locations.Single(x=>x.OtherCard).RootPath==second,"Each exact match must show its own source root.");
-                Check(locations.Single(x=>x.OtherCard).CardLabel==(sampled ? "Candidate" : "Exact match"),
-                    "Sampled matches must be distinguished from full-file matches.");
+                Check(locations.Single(x=>x.OtherCard).CardLabel=="Exact match",
+                    "Old sampling requests must still produce full-file exact matches.");
             }
         }
         static void CheckMixedFingerprints(string directory,string image) {
@@ -841,11 +844,11 @@ namespace MediaReviewer {
                 File.Copy(original,copy);
                 bytes[bytes.Length-1]=1;
                 File.WriteAllBytes(Path.Combine(folder,"different.png"),bytes);
-                options.FingerprintPolicy=new FingerprintPolicy {ThresholdBytes=0};
+                options.FingerprintPolicy=new FingerprintPolicy {Mode="Sampled",ThresholdBytes=0};
                 engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
                 var rows=Result(engine,engine.RequestPage(new PageRequest {Generation=2})).Page.Rows;
-                Check(rows.Count==2 && rows.Single(row=>row.GroupId!=first.GroupId).Algorithm=="sampled-sha256-v1",
-                    "A same-size file with a different digest must keep its own sampled fingerprint.");
+                Check(rows.Count==2 && rows.Single(row=>row.GroupId!=first.GroupId).Algorithm=="sha256",
+                    "A same-size file with a different full digest must keep its own identity.");
                 var locations=Result(engine,engine.RequestLocations(first.GroupId,"")).Locations.Rows;
                 Check(locations.Count==2 && locations.Any(row=>row.FullPath==copy),
                     "A Quick rescan must record a full-verified copy on the existing full fingerprint.");
@@ -857,8 +860,8 @@ namespace MediaReviewer {
                 File.Copy(original,reviewedCopy);
                 engine.StartScan(options);Wait(()=>!engine.Status.RunningScan);
                 var unreviewed=Result(engine,engine.RequestPage(new PageRequest {Generation=3})).Page.Rows;
-                Check(unreviewed.Count==1 && unreviewed[0].GroupId==unrelated && unreviewed[0].Algorithm=="sampled-sha256-v1",
-                    "A same-size reviewed identity changed an unrelated file's Quick card.");
+                Check(unreviewed.Count==1 && unreviewed[0].GroupId==unrelated && unreviewed[0].Algorithm=="sha256",
+                    "A same-size reviewed identity changed an unrelated file's full identity.");
                 var reviewed=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="COMPLIANT"})).Page.Rows.Single();
                 Check(reviewed.GroupId==first.GroupId && reviewed.LocationCount==3 &&
                     Result(engine,engine.RequestLocations(first.GroupId,"")).Locations.Rows.Any(row=>row.FullPath==reviewedCopy),

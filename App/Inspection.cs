@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
@@ -14,18 +15,21 @@ namespace MediaReviewer {
         void Details(MediaRow row) {
             if(row.Status=="EVIDENCE"){Original(row);return;}
             var panel=new DockPanel {Margin=new Thickness(16)};var window=Dialog("Item details and notes",panel,825,660);
-            var top=new StackPanel();Dock(panel,top,System.Windows.Controls.Dock.Top);
+            var top=new StackPanel();
+            var controls=new ScrollViewer {Content=top,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};Dock(panel,controls,System.Windows.Controls.Dock.Top);
             var summary=Label("Loading details…");top.Children.Add(summary);
-            var reviewer=Editor("",128);var notes=Editor("");notes.AcceptsReturn=true;notes.TextWrapping=TextWrapping.Wrap;
+            var reviewer=Editor("",128);var notes=Editor("");notes.Name="DetailsNotesEditor";notes.AcceptsReturn=true;notes.TextWrapping=TextWrapping.Wrap;
             notes.Height=112;notes.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;
             var scanNotes=new TextBox {IsReadOnly=true,TextWrapping=TextWrapping.Wrap,AcceptsReturn=true,MaxHeight=180,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};var scanSection=new Expander {Header="Steganography findings",Content=scanNotes,Visibility=Visibility.Collapsed};top.Children.Add(scanSection);
-            top.Children.Add(Label("Reviewer"));top.Children.Add(reviewer);top.Children.Add(Label("Notes"));top.Children.Add(notes);
+            top.Children.Add(Label("Reviewer"));top.Children.Add(reviewer);
+            var noteBody=new StackPanel();noteBody.Children.Add(notes);
+            var noteSection=new Expander {Header="Notes",IsExpanded=false,Content=noteBody};top.Children.Add(noteSection);
             var tagBar=new WrapPanel {Margin=new Thickness(0,4,0,4)};
             foreach(string preset in new[]{"Personal media","Unauthorized file","Renamed extension","Game / archive asset","Needs follow-up"}){
                 string p=preset;tagBar.Children.Add(ActionButton("+ "+p,()=>AppendNoteTag(notes,p)));
             }
             tagBar.Children.Add(ActionButton("Clear notes",()=>notes.Clear()));
-            top.Children.Add(tagBar);
+            noteBody.Children.Add(tagBar);
             var feedback=Label("");var actions=Bar();
             Dock(panel,actions,System.Windows.Controls.Dock.Bottom);Dock(panel,feedback,System.Windows.Controls.Dock.Bottom);
             var locationPanel=new DockPanel();
@@ -41,6 +45,7 @@ namespace MediaReviewer {
                 new GridViewColumn {Header="Card",Width=90,DisplayMemberBinding=new System.Windows.Data.Binding("CardLabel")},
                 new GridViewColumn {Header="Historical",Width=76,DisplayMemberBinding=new System.Windows.Data.Binding("Historical")}}};
             locationPanel.Children.Add(locations);panel.Children.Add(locationPanel);
+            panel.SizeChanged+=(s,e)=>{notes.Height=Math.Min(112,Math.Max(24,panel.ActualHeight*.25));controls.MaxHeight=Math.Max(0,panel.ActualHeight-actions.ActualHeight-feedback.ActualHeight-120);};
             bool live=true;
             var catalog=engine;
             InspectorData current=null;string cursor="",nextCursor="";Button save=null,next=null,previous=null;
@@ -97,6 +102,7 @@ namespace MediaReviewer {
                     current=r.Inspector;scanNotes.Text=current.StegoNotes;scanSection.Visibility=String.IsNullOrEmpty(current.StegoNotes) ? Visibility.Collapsed : Visibility.Visible;
                     summary.Text="Group "+current.GroupId+" · Publication "+current.Sequence+" · "+current.Status+" · "+current.Size.ToString("N0")+" bytes\n"+
                         "Root: "+current.RootPath+"\n"+current.Algorithm+" v"+current.AlgorithmVersion+": "+current.Digest+"\nPreview: "+current.PreviewState;
+                    noteSection.Header=String.IsNullOrEmpty(current.Notes) ? "Notes" : "Notes (saved)";
                     if(!preserveDraft){reviewer.Text=current.Reviewer;notes.Text=current.Notes;}
                     else feedback.Text="Saved review reloaded. Your draft is still in the editor.";
                     updateEditors();cursor="";history.Clear();loadLocations();
@@ -137,8 +143,10 @@ namespace MediaReviewer {
 
         ReviewFullScreen inspectFullScreen;
         Action clearInspector;
+        Func<bool> inspectorCanLeave;
 
         void Inspect(MediaRow row) {
+            if(inspector!=null && inspectorCanLeave!=null && !inspectorCanLeave())return;
             ResetQuickPreview();
             if(row.Status=="EVIDENCE" || row.OriginalRetained && row.LocationCount==0){
                 if(inspector!=null)inspector.Close();
@@ -153,33 +161,44 @@ namespace MediaReviewer {
                 inspectFullScreen=new ReviewFullScreen(window);
                 window.Closed+=(s,e)=>{
                     if(clearInspector!=null)clearInspector();
-                    clearInspector=null;inspectFullScreen=null;inspector=null;
+                    clearInspector=null;inspectorCanLeave=null;inspectFullScreen=null;inspector=null;
                 };
             }else{
                 window.Title="Inspect · "+row.Name;window.Content=panel;
             }
-            var top=new StackPanel();Dock(panel,top,System.Windows.Controls.Dock.Top);
+            var top=new StackPanel();
+            var controls=new ScrollViewer {Content=top,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled};Dock(panel,controls,System.Windows.Controls.Dock.Top);
             var actions=new WrapPanel();top.Children.Add(actions);
             var reviewActions=new WrapPanel();top.Children.Add(reviewActions);
             var reviewer=Editor(row.Reviewer=="" ? Box("ReviewerBox").Text : row.Reviewer,128);reviewer.Width=135;
-            var notes=Editor(row.Notes);notes.Width=220;
-            reviewActions.Children.Add(Label("Reviewer"));reviewActions.Children.Add(reviewer);reviewActions.Children.Add(Label("Notes"));reviewActions.Children.Add(notes);
+            var notes=Editor(row.Notes);notes.Name="InspectNotesEditor";notes.AcceptsReturn=true;notes.TextWrapping=TextWrapping.Wrap;notes.Height=112;notes.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;
+            reviewActions.VerticalAlignment=VerticalAlignment.Top;reviewer.VerticalAlignment=VerticalAlignment.Top;
+            reviewActions.Children.Add(Label("Reviewer"));reviewActions.Children.Add(reviewer);
+            string initialReviewer=reviewer.Text;
+            var noteBody=new StackPanel();noteBody.Children.Add(notes);
+            var noteSection=new Expander {Header=String.IsNullOrEmpty(row.Notes) ? "Notes" : "Notes (saved)",IsExpanded=false,Content=noteBody};top.Children.Add(noteSection);
             var tagActions=new WrapPanel {Margin=new Thickness(0,2,0,2)};
             foreach(string preset in new[]{"Personal media","Unauthorized file","Renamed extension","Needs follow-up"}){
                 string p=preset;tagActions.Children.Add(ActionButton("+ "+p,()=>AppendNoteTag(notes,p)));
             }
-            top.Children.Add(tagActions);
+            noteBody.Children.Add(tagActions);
             var feedback=Label("Loading source preview…");feedback.MinHeight=36;top.Children.Add(feedback);
             var image=new Image {Stretch=Stretch.Uniform};
             var preview=new ScrollViewer {Content=image,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,VerticalScrollBarVisibility=ScrollBarVisibility.Disabled};
             preview.SetResourceReference(Control.BackgroundProperty,"InsetBrush");
             var footer=Bar();Dock(panel,footer,System.Windows.Controls.Dock.Bottom);footer.Children.Add(ActionButton("Close",window.Close));
-            var mediaStage=new Grid {Background=Brushes.Transparent,ClipToBounds=true};
+            var mediaStage=new Grid {Name="InspectMediaStage",Background=Brushes.Transparent,ClipToBounds=true,MinHeight=160};
+            window.MinHeight=Math.Max(window.MinHeight,320);
+            Action boundControls=()=>{notes.Height=Math.Min(112,Math.Max(24,panel.ActualHeight*.25));controls.MaxHeight=Math.Max(0,panel.ActualHeight-footer.ActualHeight-160);};
+            panel.SizeChanged+=(s,e)=>boundControls();footer.SizeChanged+=(s,e)=>boundControls();
             var viewport=new Grid {Focusable=true,Background=Brushes.Transparent};
             viewport.Children.Add(preview);mediaStage.Children.Add(viewport);panel.Children.Add(mediaStage);
             System.Windows.Automation.AutomationProperties.SetName(viewport,"Media preview. Left and Right browse. Up marks Compliant. Down marks Non-compliant.");
             viewport.PreviewMouseLeftButtonDown+=(s,e)=>viewport.Focus();
-            bool live=true;int side=0,sourceWidth=0,sourceHeight=0,rotation=0;
+            bool live=true,reviewSaved=false;int side=0,sourceWidth=0,sourceHeight=0,rotation=0;
+            inspectorCanLeave=()=>!live || !Ready || reviewSaved || reviewer.Text==initialReviewer && notes.Text==(row.Notes??"") || MessageBox.Show(window,"Leave this item and discard its unsaved edits?","Unsaved notes",MessageBoxButton.YesNo)==MessageBoxResult.Yes;
+            CancelEventHandler protectDraft=(s,e)=>{if(inspectorCanLeave!=null && !inspectorCanLeave())e.Cancel=true;};
+            window.Closing+=protectDraft;
             string layout="Fit";double zoom=1;
             int position=positionOf(row);
             CardItem current=position>=0 ? cards[position] : new CardItem(row);
@@ -200,6 +219,7 @@ namespace MediaReviewer {
                 Review(key,new[]{current},r=>{
                     if(!live)return;
                     if(!r.Success){feedback.Text=r.Error;return;}
+                    reviewSaved=true;
                     if(Ready && view.Accept(generation) && next!=null && cards.Contains(next))Inspect(next.Record);
                     else window.Close();
                 },reviewer.Text,notes.Text,()=>live && Ready && view.Accept(generation));
@@ -207,7 +227,7 @@ namespace MediaReviewer {
             for(int i=0;i<BucketKeys.Length;i++){
                 string key=BucketKeys[i];
                 if(key==DraftReview.Bucket || key==StegoFindings.Bucket)continue;
-                reviewActions.Children.Add(ActionButton(BucketNames[i],()=>Guard(()=>classify(key))));
+                var decision=ActionButton(BucketNames[i],()=>Guard(()=>classify(key)));decision.VerticalAlignment=VerticalAlignment.Top;reviewActions.Children.Add(decision);
             }
 
             if(position>=0)image.Source=cards[position].Image;
@@ -325,7 +345,7 @@ namespace MediaReviewer {
                 else feedback.Text=result.Error??"Preview unavailable.";
             };
             clearInspector=()=>{
-                live=false;window.PreviewKeyDown-=keys;refine.Stop();
+                live=false;window.PreviewKeyDown-=keys;window.Closing-=protectDraft;refine.Stop();
                 loader.CancelInspect(inspection.Advance());showInspection=null;image.Source=null;
                 if(player!=null)player.Dispose();
             };

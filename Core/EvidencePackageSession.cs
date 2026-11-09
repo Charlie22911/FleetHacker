@@ -29,7 +29,7 @@ namespace MediaReviewer {
             work.Generation=++generation;if(work.Kind!="Export")ClearView();else if(result!=null){result.Dispose();result=null;}
             if(work.Kind=="Unlock" || work.Kind=="Lock")unlocked=false;if(work.Kind=="Lock")lockRequested=true;if(active!=null)active.Cancel.Cancel();if(pending!=null){pending.Cancel.Cancel();pending.Dispose();}pending=work;busy=true;status=new OperationProgress {Kind=work.Kind,State="queued",Stage=work.Kind+" queued"};Monitor.PulseAll(gate);return generation;
         }}
-        public long RequestUnlock(byte[] password){if(password==null || password.Length<1 || password.Length>65536){if(password!=null)Array.Clear(password,0,password.Length);throw new ArgumentException("Enter a bounded non-empty password");}return Submit(new Work {Kind="Unlock",Password=password});}
+        public long RequestUnlock(byte[] password){if(password==null || password.Length<1 || password.Length>65536){if(password!=null)Array.Clear(password,0,password.Length);throw new ArgumentException("Enter a bounded non-empty password");}var work=new Work {Kind="Unlock",Password=password};bool submitted=false;try{long id=Submit(work);submitted=true;return id;}finally{if(!submitted)work.Dispose();}}
         public long RequestInspect(int index){if(index<0 || index>=200)throw new ArgumentOutOfRangeException("index");return Submit(new Work {Kind="Inspect",Index=index});}
         public long RequestExport(int index,string destination){if(index<0 || index>=200 || String.IsNullOrEmpty(destination) || destination.Length>32767)throw new ArgumentException("Choose an original and a new output file");return Submit(new Work {Kind="Export",Index=index,Destination=destination});}
         public long RequestLock(){return Submit(new Work {Kind="Lock"});}
@@ -62,8 +62,7 @@ namespace MediaReviewer {
                     else if(work.Kind=="Export"){reader.ExportOriginal(work.Index,work.Destination,token,Progress);reply.Value="Verified original exported: "+work.Destination;}
                     if(work.Kind!="Export")token.ThrowIfCancellationRequested();reply.Success=true;
                 }catch(Exception error){if(work.Kind=="Unlock" && reader!=null)reader.Lock();SetFailure(reply,error);}
-                Complete(work,reply);
-                work.Dispose();
+                try{Complete(work,reply);}finally{work.Dispose();}
             }}catch(Exception error){lock(gate){status.State="failed";status.Error=error.Message;status.Stage="Package worker stopped: "+error.Message;}}
             finally{try{if(reader!=null)reader.Dispose();}finally{lock(ownersGate)owners--;lock(gate){if(active!=null){active.Dispose();active=null;}if(pending!=null){pending.Dispose();pending=null;}ClearView();unlocked=false;busy=false;closed=true;Monitor.PulseAll(gate);}}}
         }

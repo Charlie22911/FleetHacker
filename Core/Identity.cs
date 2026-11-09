@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 using System.Threading;
 namespace MediaReviewer {
     public sealed class FingerprintPolicy {
-        public string Mode="Sampled";
+        public string Mode="Full";
         public long ThresholdBytes=1024*1024;
         public int AlgorithmVersion=1,WindowCount=10,MaxWindowBytes=1024*1024;
         public static FingerprintPolicy Full(){return new FingerprintPolicy {Mode="Full"};}
@@ -22,7 +22,7 @@ namespace MediaReviewer {
     public static class Identity {
         // Public synchronous entry point for command-line tools. UI callers use owned background workers.
         public static FileRecord Read(string path,FingerprintPolicy policy,CancellationToken token){
-            return FileAccessNative.Fingerprint(path,new FileRecord(),new byte[1024*1024],token,null,0,policy.Copy());
+            return FileAccessNative.Fingerprint(path,new FileRecord(),new byte[1024*1024],token,null,0,FingerprintPolicy.Full());
         }
         internal static IEnumerable<long[]> Ranges(long size,FingerprintPolicy policy){
             long width=Math.Max(1,Math.Min(policy.MaxWindowBytes,size/(policy.WindowCount*2)));

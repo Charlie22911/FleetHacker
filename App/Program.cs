@@ -47,7 +47,8 @@ namespace MediaReviewer {
         static int Run() {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
-            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
+            if(mode=="--verify-symbols" && args.Length==1){try{ManagedSmoke.VerifySymbols();Console.WriteLine("Matching native-host symbols include source lines.");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
+            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-stego-policy" || mode=="--verify-review-ui" || mode=="--verify-reliability" || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
@@ -57,6 +58,9 @@ namespace MediaReviewer {
                 if(mode=="--draft-worker" && (args.Length==1 || args.Length==2 && (args[1]=="gemma" || args[1]=="gemma-vulkan")))return DraftModelWorker.Run(args.Length==2,args.Length==2 && args[1]=="gemma-vulkan");
                 if(mode=="--playback-worker")return PlaybackProxy.Worker();
                 MediaScratch.QueueRecovery();
+                if(mode=="--verify-reliability" && args.Length==2)return ReliabilitySmoke.Run(args[1]);
+                if(mode=="--verify-stego-policy" && args.Length==2)return StegoPolicySmoke.Run(args[1]);
+                if(mode=="--verify-review-ui" && args.Length==2)return ReviewUiSmoke.Run(args[1]);
                 if(mode=="--verify-stego-notes" && args.Length==2)return StegoQueueSmoke.NotesRun(args[1]);
                 if(mode=="--verify-stego-interface" && args.Length==2)return StegoQueueSmoke.InterfaceRun(args[1]);
                 if(mode=="--verify-gallery" && args.Length==2)return GalleryAnimationSmoke.Run(args[1]);
@@ -71,6 +75,7 @@ namespace MediaReviewer {
                 if(mode!=null && mode!="--window-smoke" && ((mode!="--database" && mode!="--open-evidence-package") || args.Length!=2))throw new ArgumentException("Use --database with a local SQLite path, --open-evidence-package with a package path, or launch without arguments.");
                 var app=new Application();
                 using(var controller=new ReviewerWindow(ReadWindow(),mode!="--window-smoke")) {
+                    app.DispatcherUnhandledException+=(s,e)=>{try{e.Handled=controller.HandleUiFailure(e.Exception);}catch(Exception boundaryError){FailureDiagnostics.Record("Dispatcher fail-stop",boundaryError);e.Handled=false;}};
                     if(mode==null)controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>controller.ShowStartupCatalog()));
                     if(mode=="--database")controller.Open(args[1],false);
                     if(mode=="--open-evidence-package")controller.Window.Loaded+=(s,e)=>controller.Window.Dispatcher.BeginInvoke(new Action(()=>{

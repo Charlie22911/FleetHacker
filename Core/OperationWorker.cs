@@ -25,7 +25,8 @@ namespace MediaReviewer {
         public OperationProgress GetOperationProgress(string requestId) {var stego=GetStegoProgress(requestId);if(stego!=null)return stego;lock(operationGate){OperationWork work;return operationStates.TryGetValue(requestId,out work) ? work.Progress.Copy() : null;}}
         // operationGate also owns the transition from a queued secret to an executing body.
         void CleanOperation(OperationWork work){var cleanup=work.Cleanup;work.Cleanup=null;if(cleanup!=null)cleanup();}
-        void CancelWork(OperationWork work){if(work.Cancel==null)return;work.Cancel.Cancel();work.Progress.State="cancelling";if(!work.Started)CleanOperation(work);}
+        void ReleaseOperation(OperationWork work){lock(operationGate){try{CleanOperation(work);}finally{if(work.Cancel!=null){work.Cancel.Dispose();work.Cancel=null;}}}}
+        void CancelWork(OperationWork work){if(work.Cancel==null)return;try{work.Cancel.Cancel();work.Progress.State="cancelling";if(!work.Started)CleanOperation(work);}catch(Exception error){FailureDiagnostics.Record("Operation cancellation cleanup",error);operationFailure=error;operationReady=false;operationQueue.Close();work.Progress.State="failed";work.Progress.Error="Operation cancellation cleanup failed; reopen the database before retrying.";}}
         public void CancelOperation(string requestId) {if(CancelStego(requestId))return;lock(operationGate){OperationWork work;if(operationStates.TryGetValue(requestId,out work))CancelWork(work);}}
         internal string EnqueueOperation(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes=2048,Action cleanup=null) {return EnqueueOperationWithId(kind,body,retainedBytes,cleanup,null);}
         string EnqueueOperationWithId(string kind,Func<SqliteConnection,CancellationToken,Action<long,long,string>,object> body,long retainedBytes,Action cleanup,string requestId) {
@@ -63,7 +64,8 @@ namespace MediaReviewer {
                 lock(operationGate){operationReady=true;Monitor.PulseAll(operationGate);}
                 while(true) {
                     OperationWork work=operationQueue.Take(CancellationToken.None,50);if(work==null){if(closing || stop.IsCancellationRequested || operationFailure!=null)break;continue;}
-                    string failure="";object value=null;var timer=Stopwatch.StartNew();long lastReport=0;
+                    string failure="";object value=null;EvidenceInspection secret=null;bool delivered=false;var timer=Stopwatch.StartNew();long lastReport=0;
+                    try {
                     try {
                         if(!vaultUnlocked)ClearVaultWorker();
                         lock(operationGate){work.Progress.State="running";work.Progress.Stage=work.Progress.Kind+" starting";}StoreOperation(work);work.Cancel.Token.ThrowIfCancellationRequested();
@@ -78,7 +80,7 @@ namespace MediaReviewer {
                         });
                         lock(operationGate){work.Progress.State="complete";work.Progress.Stage=work.Progress.Kind+" complete";work.Progress.LastProgressUtc=DateTime.UtcNow;}
                     } catch(Exception error) {
-                        bool cancelled=work.Cancel.IsCancellationRequested;failure=cancelled ? work.Progress.Kind+" cancelled; completed database commits were retained" : error.Message;
+                        bool cancelled=work.Cancel.IsCancellationRequested;failure=cancelled ? work.Progress.Kind+" cancelled; completed database commits were retained" : FailureDiagnostics.Brief(error);
                         lock(operationGate){work.Progress.State=cancelled ? "cancelled" : "failed";work.Progress.Stage=failure;work.Progress.Error=failure;work.Progress.LastProgressUtc=DateTime.UtcNow;}
                     }
                     try{StoreOperation(work);}catch(Exception error){
@@ -88,28 +90,44 @@ namespace MediaReviewer {
                     }
                     Update(s=>{s.BusyOperation=false;s.Stage=s.RunningScan ? "Scanning" : "Ready";});
                     var receipt=value as IdentityResolutionReceipt;
-                    var original=value as OriginalReceipt;var secret=value as EvidenceInspection;
+                    var original=value as OriginalReceipt;secret=value as EvidenceInspection;
                     if(secret!=null && (failure.Length!=0 || !vaultUnlocked || secret.Epoch!=VaultGeneration)){secret.Dispose();secret=null;if(failure.Length==0)failure="Vault locked; protected result discarded.";}
+                    // Resource release is part of the outcome; never announce success before it finishes.
+                    ReleaseOperation(work);
                     Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=original!=null ? original.Kind : work.Progress.Kind=="Capture" || work.Progress.Kind=="EvidenceReclassify" ? "Review" : work.Progress.Kind,Success=failure.Length==0,Error=failure,Value=original!=null ? original.Message : receipt==null ? value as string : receipt.Message,IdentityPreview=value as IdentityResolutionPreview,Evidence=secret,GroupIds=original==null ? null : original.GroupIds,OperationId=original!=null ? original.OperationId : receipt==null ? null : receipt.OperationId,Reconciled=original!=null ? original.Reconciled : receipt!=null && receipt.Reconciled,ReviewRevisions=original==null ? null : original.ReviewRevisions});
+                    delivered=true;
                     if(!vaultUnlocked)ClearVaultWorker();
-                    lock(operationGate){CleanOperation(work);work.Cancel.Dispose();work.Cancel=null;}
+                    } catch(Exception error) {
+                        FailureDiagnostics.Record("Operation outcome delivery",error);
+                        var original=value as OriginalReceipt;
+                        string message=(original!=null && original.OutputPublished || work.Progress.Kind=="Report" && value is string ? "Output was already published; inspect it before retrying. " : "Inspect any output before retrying. ")+"The background result could not be delivered: "+FailureDiagnostics.Brief(error);
+                        lock(operationGate){work.Progress.State="failed";work.Progress.Stage=message;work.Progress.Error=message;work.Progress.LastProgressUtc=DateTime.UtcNow;}
+                        try{StoreOperation(work);}catch(Exception statusError){FailureDiagnostics.Record("Failed outcome persistence",statusError);}
+                        try{Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=original!=null ? original.Kind : work.Progress.Kind,Success=false,Error=message,OperationId=original==null ? null : original.OperationId});}catch(Exception fallback){FailureDiagnostics.Record("Operation failure delivery",fallback);}
+                        // Close the channel before releasing this work so another request cannot race a broken worker.
+                        lock(operationGate){operationFailure=error;operationReady=false;operationQueue.Close();}
+                    } finally {
+                        if(!delivered){var protectedValue=value as EvidenceInspection;if(protectedValue!=null)protectedValue.Dispose();}
+                        ReleaseOperation(work);
+                    }
+                    if(operationFailure!=null){FailOperations(operationFailure);break;}
                 }
             }} catch(Exception error){FailOperations(error);}finally{InvalidateVault();ClearVaultWorker();}
         }
         void FailOperations(Exception error) {
-            OperationWork[] abandoned;string message="Background worker stopped; reopen the database before retrying: "+error.Message;
+            OperationWork[] abandoned;string message="Background worker stopped; reopen the database before retrying: "+FailureDiagnostics.Brief(error);
             lock(operationGate){
                 operationReady=false;operationFailure=error;operationQueue.Close();
                 abandoned=operationStates.Values.Where(x=>x.Cancel!=null).ToArray();
-                foreach(var work in abandoned){work.Cancel.Cancel();work.Progress.State="failed";work.Progress.Stage=message;work.Progress.Error=message;work.Progress.LastProgressUtc=DateTime.UtcNow;}
+                foreach(var work in abandoned){try{work.Cancel.Cancel();}catch(Exception cancellation){FailureDiagnostics.Record("Abandoned operation cancellation",cancellation);}work.Progress.State="failed";work.Progress.Stage=message;work.Progress.Error=message;work.Progress.LastProgressUtc=DateTime.UtcNow;}
                 while(operationQueue.Take(CancellationToken.None,0)!=null){}
                 Monitor.PulseAll(operationGate);
             }
-            if(!closing && !stop.IsCancellationRequested)Update(s=>{s.BusyOperation=false;s.Error=message;});
+            if(!closing && !stop.IsCancellationRequested)Update(s=>{s.BusyOperation=false;s.Stage="Background worker stopped";s.Error=message;});
             foreach(var work in abandoned){
                 try{if(!closing && !stop.IsCancellationRequested)StoreOperation(work);}catch(Exception commitError){lock(operationGate)work.Progress.Error=message+"; failure status could not be committed: "+commitError.Message;}
-                Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=work.Progress.Kind=="Capture" || work.Progress.Kind=="EvidenceReclassify" ? "Review" : work.Progress.Kind,Success=false,Error=work.Progress.Error});
-                lock(operationGate){CleanOperation(work);work.Cancel.Dispose();work.Cancel=null;}
+                try{Respond(new UiResult {RequestId=work.Progress.RequestId,Kind=work.Progress.Kind=="Capture" || work.Progress.Kind=="EvidenceReclassify" ? "Review" : work.Progress.Kind,Success=false,Error=work.Progress.Error});}catch(Exception delivery){FailureDiagnostics.Record("Abandoned operation delivery",delivery);}
+                finally{try{ReleaseOperation(work);}catch(Exception cleanup){FailureDiagnostics.Record("Abandoned operation cleanup",cleanup);}}
             }
         }
         void StopOperations(){operationQueue.Close();lock(operationGate){foreach(var work in operationStates.Values)CancelWork(work);}if(operationThread!=null && Thread.CurrentThread!=operationThread)operationThread.Join();}

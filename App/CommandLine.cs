@@ -25,7 +25,7 @@ namespace MediaReviewer {
         internal static int Run(string[] args) {
             AttachIfNeeded();
             if(args.Length==1 && args[0]=="--help"){
-                Console.WriteLine("Media Compliance Reviewer\n--database PATH\n--create-database PATH\n--import-html SOURCE DESTINATION\n--open-evidence-package PATH\n--verify-dependencies\n--verify-gemma-model [--cpu-only] IMAGE [IMAGE ...]\n--database PATH --scan-root ROOT [--workers N] [--scan-mode quick|deep] [--extensions jpg,png] [--scan-archives] [--no-sniff-renamed] [--full-hash] [--include-appdata] [--exclude-root-files] [--max-age-years N]\n--database PATH --resume-scan ID|latest [--workers N]");
+                Console.WriteLine("Media Compliance Reviewer\n--database PATH\n--create-database PATH\n--import-html SOURCE DESTINATION\n--open-evidence-package PATH\n--verify-dependencies\n--verify-gemma-model [--cpu-only] IMAGE [IMAGE ...]\n--database PATH --scan-root ROOT [--workers N] [--scan-mode quick|deep] [--extensions jpg,png] [--scan-archives] [--no-sniff-renamed] [--include-appdata] [--exclude-root-files] [--max-age-years N]\n--database PATH --resume-scan ID|latest [--workers N]");
                 return 0;
             }
             if(args.Length==1 && args[0]=="--verify-dependencies"){VerifyDependencies();return 0;}
@@ -111,7 +111,7 @@ namespace MediaReviewer {
             return new ScanArguments {Resume=resume,Scan=new ScanOptions {RootPath=root,WorkerCount=workers,ModifiedAgeYears=age,
                 ExcludeApplicationData=mode!="deep" && !values.ContainsKey("--include-appdata"),IncludeRootFiles=!values.ContainsKey("--exclude-root-files"),ScanArchives=values.ContainsKey("--scan-archives"),SniffRenamed=!values.ContainsKey("--no-sniff-renamed"),
                 Extensions=values.TryGetValue("--extensions",out extensions) ? extensions.Split(',').Select(x=>x.Trim()).ToArray() : mode=="deep" ? Formats.Deep : Formats.Quick,
-                FingerprintPolicy=values.ContainsKey("--full-hash") ? FingerprintPolicy.Full() : new FingerprintPolicy()}};
+                FingerprintPolicy=FingerprintPolicy.Full()}};
         }
 
         static int Number(Dictionary<string,string> values,string key,int fallback,int min,int max) {

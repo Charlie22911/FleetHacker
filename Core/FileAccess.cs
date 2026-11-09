@@ -142,7 +142,17 @@ namespace MediaReviewer {
         }
         // The caller owns the stream. Verification keeps this read-only lease across both hashes.
         internal static FileRecord FingerprintOpened(string path,FileStream stream,FileRecord record,byte[] buffer,CancellationToken token,Action<int> progress,long cutoff,FingerprintPolicy policy=null) {
-                policy=policy??FingerprintPolicy.Full();policy.Validate();token.ThrowIfCancellationRequested();
+            // Legacy preferences and resumed manifests cannot opt a new identity out of a full read.
+            return FingerprintOpenedCore(path,stream,record,buffer,token,progress,cutoff,FingerprintPolicy.Full());
+        }
+        // Compatibility only: reproduce an existing saved candidate for comparison. Never
+        // submit this result to the new-scan publisher or treat equality as full-file proof.
+        internal static FileRecord FingerprintLegacyOpened(string path,FileStream stream,byte[] buffer,CancellationToken token,Action<int> progress,FingerprintPolicy policy) {
+            if(policy==null || policy.Mode!="Sampled")throw new InvalidDataException("An existing legacy candidate policy is required for compatibility verification");
+            policy.Validate();return FingerprintOpenedCore(path,stream,new FileRecord(),buffer,token,progress,0,policy);
+        }
+        static FileRecord FingerprintOpenedCore(string path,FileStream stream,FileRecord record,byte[] buffer,CancellationToken token,Action<int> progress,long cutoff,FingerprintPolicy policy) {
+                token.ThrowIfCancellationRequested();
                 FileStamp before=Stamp(stream); if(cutoff>0 && before.ModifiedTicks<cutoff) return null;
                 if(Identity.RecycleMetadata(path,stream,before.Size,buffer,token)){
                     token.ThrowIfCancellationRequested();if(!before.Same(Stamp(stream)))throw new FileChangedException("Recycle metadata changed during validation");return null;

@@ -12,20 +12,20 @@ namespace MediaReviewer {
         public string ManifestRootIdentity,ManifestSourceHead;
         public bool ExcludeApplicationData=true,IncludeRootFiles=true,ScanArchives,SniffRenamed=true;
         public string[] Extensions=Formats.Quick; public long CutoffUtcTicks;
-        public FingerprintPolicy FingerprintPolicy=new FingerprintPolicy();
+        public FingerprintPolicy FingerprintPolicy=MediaReviewer.FingerprintPolicy.Full();
         public static ScanOptions FromJson(string json){
-            var serializer=new JavaScriptSerializer();var saved=serializer.DeserializeObject(json) as Dictionary<string,object>;
+            var serializer=new JavaScriptSerializer();
             var options=serializer.Deserialize<ScanOptions>(json);
-            if(saved==null || !saved.ContainsKey("FingerprintPolicy"))options.FingerprintPolicy=MediaReviewer.FingerprintPolicy.Full();
-            if(options.FingerprintPolicy==null)throw new InvalidDataException("Saved scan has no fingerprint policy");
-            options.FingerprintPolicy.Validate();return options;
+            // Retain the old JSON shape for imported/resumed manifests, but never resume
+            // production sampling. Completed legacy records remain unchanged.
+            options.FingerprintPolicy=MediaReviewer.FingerprintPolicy.Full();return options;
         }
-        internal ScanOptions Copy() { var copy=(ScanOptions)MemberwiseClone(); copy.Extensions=(string[])Extensions.Clone();copy.FingerprintPolicy=FingerprintPolicy.Copy();return copy; }
+        internal ScanOptions Copy() { var copy=(ScanOptions)MemberwiseClone(); copy.Extensions=(string[])Extensions.Clone();copy.FingerprintPolicy=MediaReviewer.FingerprintPolicy.Full();return copy; }
         internal void Validate() {
             if(WorkerCount<1 || WorkerCount>8 || ModifiedAgeYears<0 || ModifiedAgeYears>MaxModifiedAgeYears || Extensions==null || Extensions.Length==0) throw new ArgumentException("Choose 1–8 workers, an age of 0–200 years, and selected media types.");
             Extensions=Extensions.Select(x=>x.TrimStart('.').ToLowerInvariant()).Distinct().ToArray();
             if(Extensions.Any(x=>!Formats.Supported(x))) throw new ArgumentException("An unknown media extension was selected. Use the available image, RAW and video families.");
-            if(FingerprintPolicy==null)throw new ArgumentException("A fingerprint policy is required");FingerprintPolicy.Validate();
+            FingerprintPolicy=MediaReviewer.FingerprintPolicy.Full();
             RootPath=Paths.Source(RootPath);
             if(ModifiedAgeYears==0) CutoffUtcTicks=0;
             else if(CutoffUtcTicks==0) CutoffUtcTicks=DateTime.UtcNow.AddYears(-ModifiedAgeYears).Ticks;
@@ -72,7 +72,7 @@ namespace MediaReviewer {
                     bool sameRoot=options.ManifestRootIdentity!=null ? options.ManifestRootIdentity==currentIdentity : samePath && sameBinding;
                     if(!sameRoot)throw new InvalidOperationException("The saved manifest's source folder cannot be verified at its current location. Restore the original source or start a fresh scan. Saved reviews and checkpoints are preserved.");
                     options.RootPath=currentPath;options.Validate();
-                    Write(db=> { db.Execute("UPDATE jobs SET state='pending' WHERE scan_id=? AND state='processing'",id); db.Execute("UPDATE scans SET state='running' WHERE id=?",id); return null; });
+                    Write(db=> { db.Execute("UPDATE jobs SET state='pending' WHERE scan_id=? AND state='processing'",id); db.Execute("UPDATE scans SET state='running',config_json=? WHERE id=?",new JavaScriptSerializer().Serialize(options),id); return null; });
                     manifestStarted=true;
                     if((long)row[2]==0) Manifest();
                 } else {

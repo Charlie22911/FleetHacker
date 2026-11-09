@@ -10,18 +10,18 @@ namespace MediaReviewer {
     }
     public sealed class ReconnectBatch {
         public string Id="",Path="",State="none",CreatedAt="";public bool ManifestComplete;
-        public long TotalRoots,CompletedRoots,ConnectedRoots,BlockedRoots,Full,Candidates,Missing,Failed;
+        public long TotalRoots,CompletedRoots,ConnectedRoots,BlockedRoots,ReviewRoots,Full,Candidates,Missing,Failed;
         public List<ReconnectRootResult> Rows=new List<ReconnectRootResult>();
         internal long Cost {get{return 512+2L*(Id.Length+Path.Length+State.Length+CreatedAt.Length)+Rows.Sum(r=>128L+2L*(r.RootId.Length+r.Label.Length+r.State.Length+r.Error.Length));}}
-        public string Summary {get{return "Reconnect all: "+Full+" full matches, "+Candidates+" quick candidates, "+Missing+" missing, "+Failed+" failed; "+ConnectedRoots+" / "+TotalRoots+" roots connected, "+BlockedRoots+" blocked. Quick matches remain candidates. Reviews and display order are preserved.";}}
+        public string Summary {get{return "Reconnect all: "+Full+" full matches, "+Candidates+" legacy candidates, "+Missing+" missing, "+Failed+" failed; "+ConnectedRoots+" / "+TotalRoots+" roots connected, "+ReviewRoots+" need review, "+BlockedRoots+" blocked. Open Sources / reconnect to review and explicitly accept eligible pending checks. Reviews and display order are preserved.";}}
     }
     public static partial class Catalog {
         internal static ReconnectBatch ReconnectStatus(SqliteConnection db,string id,bool details=true){
             if(id==null)id=(string)db.Scalar("SELECT id FROM source_reconnect_batches ORDER BY created_at DESC,id DESC LIMIT 1");if(id==null)return new ReconnectBatch();
             var rows=db.Query("SELECT id,path,state,created_at,manifest_complete FROM source_reconnect_batches WHERE id=?",new object[]{id},1);if(rows.Count==0)throw new InvalidOperationException("This reconnect task is unavailable; refresh Reconnect all.");var r=rows[0];
             var b=new ReconnectBatch {Id=(string)r[0],Path=(string)r[1],State=(string)r[2],CreatedAt=(string)r[3],ManifestComplete=(long)r[4]!=0};
-            var counts=db.Query("SELECT COUNT(*),COALESCE(SUM(state IN('connected','unmatched','blocked','discarded')),0),COALESCE(SUM(state='connected'),0),COALESCE(SUM(state='blocked'),0),COALESCE(SUM(CASE WHEN state='connected' THEN full_count ELSE 0 END),0),COALESCE(SUM(CASE WHEN state='connected' THEN candidate_count ELSE 0 END),0),COALESCE(SUM(missing_count),0),COALESCE(SUM(failed_count),0) FROM source_reconnect_items WHERE batch_id=?",new object[]{id},1)[0];
-            b.TotalRoots=(long)counts[0];b.CompletedRoots=(long)counts[1];b.ConnectedRoots=(long)counts[2];b.BlockedRoots=(long)counts[3];b.Full=(long)counts[4];b.Candidates=(long)counts[5];b.Missing=(long)counts[6];b.Failed=(long)counts[7];
+            var counts=db.Query("SELECT COUNT(*),COALESCE(SUM(state IN('connected','accepted','unmatched','blocked','discarded','review')),0),COALESCE(SUM(state IN('connected','accepted')),0),COALESCE(SUM(state='blocked'),0),COALESCE(SUM(full_count),0),COALESCE(SUM(candidate_count),0),COALESCE(SUM(missing_count),0),COALESCE(SUM(failed_count),0),COALESCE(SUM(state='review'),0) FROM source_reconnect_items WHERE batch_id=?",new object[]{id},1)[0];
+            b.TotalRoots=(long)counts[0];b.CompletedRoots=(long)counts[1];b.ConnectedRoots=(long)counts[2];b.BlockedRoots=(long)counts[3];b.Full=(long)counts[4];b.Candidates=(long)counts[5];b.Missing=(long)counts[6];b.Failed=(long)counts[7];b.ReviewRoots=(long)counts[8];
             if(details)foreach(var row in db.Query("SELECT i.root_id,substr(r.label,1,1024),i.state,i.full_count,i.candidate_count,i.missing_count,i.failed_count,substr(i.error,1,2048) FROM source_reconnect_items i JOIN roots r ON r.id=i.root_id WHERE i.batch_id=? ORDER BY CASE WHEN i.state IN('checking','cleaning_unmatched','cleaning_blocked') THEN 0 WHEN i.state='pending' THEN 2 ELSE 1 END,i.root_order DESC LIMIT 60",new object[]{id},60))b.Rows.Add(new ReconnectRootResult {RootId=(string)row[0],Label=(string)row[1],State=(string)row[2],Full=(long)row[3],Candidates=(long)row[4],Missing=(long)row[5],Failed=(long)row[6],Error=(string)row[7]});
             return b;
         }
@@ -68,8 +68,8 @@ namespace MediaReviewer {
                         CheckConnection(db,connection,exists ? null : root,exists ? null : path,token,(done,total,unit)=>progress(done,total,"root "+ordinal+" / "+b.TotalRoots+": "+unit));token.ThrowIfCancellationRequested();
                         var checkedRoot=Catalog.ConnectionStatus(db,connection,false);
                         WaitWrite(w=>{Catalog.PreviewTransaction(w,()=>{
-                            if(checkedRoot.Full+checkedRoot.Candidates>0)ApplyConnection(w,connection,true,true);
-                            w.Execute("UPDATE source_reconnect_items SET state=?,full_count=?,candidate_count=?,missing_count=?,failed_count=? WHERE batch_id=? AND root_id=?",checkedRoot.Full+checkedRoot.Candidates>0 ? "connected" : "cleaning_unmatched",checkedRoot.Full,checkedRoot.Candidates,checkedRoot.Missing,checkedRoot.Failed,id,root);Catalog.Bump(w);
+                            bool clean=FullyVerifiedConnection(checkedRoot);if(clean)ApplyConnection(w,connection,false,true);
+                            w.Execute("UPDATE source_reconnect_items SET state=?,full_count=?,candidate_count=?,missing_count=?,failed_count=?,error=? WHERE batch_id=? AND root_id=?",clean ? "connected" : "review",checkedRoot.Full,checkedRoot.Candidates,checkedRoot.Missing,checkedRoot.Failed,clean ? "" : "Review this source check in Sources / reconnect. Legacy candidates and missing files need explicit acceptance; failures require a new check.",id,root);Catalog.Bump(w);
                         });return null;});
                     }catch(InvalidOperationException failure){
                         string error=failure.Message.Length>2048 ? failure.Message.Substring(0,2048) : failure.Message;
@@ -77,7 +77,7 @@ namespace MediaReviewer {
                     }
                     var current=Catalog.ReconnectStatus(db,id,false);progress(current.CompletedRoots,current.TotalRoots,"source roots finished");
                 }
-                var final=Catalog.ReconnectStatus(db,id,false);WaitWrite(w=>{w.Execute("UPDATE source_reconnect_batches SET state=? WHERE id=?",final.Missing+final.Failed+final.BlockedRoots>0 ? "complete_errors" : "complete",id);Catalog.Log(w,"info","Reconnect all",path,final.Summary);return null;});return final.Summary;
+                var final=Catalog.ReconnectStatus(db,id,false);WaitWrite(w=>{w.Execute("UPDATE source_reconnect_batches SET state=? WHERE id=?",final.Missing+final.Failed+final.BlockedRoots+final.ReviewRoots>0 ? "complete_errors" : "complete",id);Catalog.Log(w,"info","Reconnect all",path,final.Summary);return null;});return final.Summary;
             }catch{if(!faulted && !stop.IsCancellationRequested)try{WaitWrite(w=>{w.Execute("UPDATE source_reconnect_batches SET state='interrupted' WHERE id=? AND state='running'",id);return null;});}catch{}throw;}
         }
         void BlockReconnectRoot(string batch,string root,string error){WaitWrite(w=>{w.Execute("UPDATE source_reconnect_items SET state='blocked',error=? WHERE batch_id=? AND root_id=?",error,batch,root);Catalog.Log(w,"warning","Reconnect all",root,error);return null;});}
@@ -90,7 +90,7 @@ namespace MediaReviewer {
         bool PreserveAppliedReconnectRoot(string batch,string root,string connection){
             if(connection==null)return false;return (bool)WaitWrite(w=>{bool applied=false;Catalog.PreviewTransaction(w,()=>{
                 if(w.Scalar("SELECT 1 FROM root_source_heads WHERE root_id=? AND connection_id=?",root,connection)==null)return;
-                var s=Catalog.ConnectionStatus(w,connection,false);w.Execute("UPDATE source_reconnect_items SET state='connected',full_count=?,candidate_count=?,missing_count=?,failed_count=?,error='' WHERE batch_id=? AND root_id=?",s.Full,s.Candidates,s.Missing,s.Failed,batch,root);Catalog.Bump(w);applied=true;
+                var s=Catalog.ConnectionStatus(w,connection,false);bool clean=FullyVerifiedConnection(s);w.Execute("UPDATE source_reconnect_items SET state=?,full_count=?,candidate_count=?,missing_count=?,failed_count=?,error=? WHERE batch_id=? AND root_id=?",clean ? "connected" : "review",s.Full,s.Candidates,s.Missing,s.Failed,clean ? "" : "Review this previously applied mixed reconnect in Sources / reconnect; its legacy candidates remain unverified.",batch,root);Catalog.Bump(w);applied=true;
             });return (object)applied;});
         }
         string DiscardReconnectAll(SqliteConnection db,string id,CancellationToken token,Action<long,long,string> progress){

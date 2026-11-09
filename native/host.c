@@ -15,17 +15,40 @@ static const GUID method_iid = {0xffcc1b5d,0xecb8,0x38dd,{0x9b,0x01,0x3d,0xc8,0x
 
 /* Fixed CLR 4 COM ABI from the mscorlib type library. The slots include
    IUnknown and, for the dual _Assembly interface, the inherited IDispatch. */
-enum { APP_DOMAIN_LOAD_BYTES = 45, ASSEMBLY_ENTRY_POINT = 16, METHOD_INVOKE = 37 };
+enum { APP_DOMAIN_LOAD_BYTES = 45, APP_DOMAIN_LOAD_SYMBOLS = 46, ASSEMBLY_ENTRY_POINT = 16, METHOD_INVOKE = 37 };
 typedef HRESULT (STDMETHODCALLTYPE *LoadBytes)(IUnknown *, SAFEARRAY *, IUnknown **);
+typedef HRESULT (STDMETHODCALLTYPE *LoadSymbols)(IUnknown *, SAFEARRAY *, SAFEARRAY *, IUnknown **);
 typedef HRESULT (STDMETHODCALLTYPE *EntryPoint)(IUnknown *, IUnknown **);
 typedef HRESULT (STDMETHODCALLTYPE *InvokeMethod)(IUnknown *, VARIANT, SAFEARRAY *, VARIANT *);
 static void *slot(IUnknown *object, size_t index) { return ((void **)(object->lpVtbl))[index]; }
+
+/* The byte-loaded assembly has no path for normal symbol discovery. The
+   optional <exact host filename>.pdb is supplied with its embedded bytes. */
+static HRESULT read_symbols(SAFEARRAY **symbols) {
+    wchar_t path[32768];
+    DWORD length=GetModuleFileNameW(NULL,path,32768),size,read;
+    HANDLE file;void *data;HRESULT hr;
+    *symbols=NULL;
+    if(!length || length>=32763)return HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+    wcscat(path,L".pdb");
+    file=CreateFileW(path,GENERIC_READ,FILE_SHARE_READ,NULL,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,NULL);
+    if(file==INVALID_HANDLE_VALUE){DWORD error=GetLastError();return error==ERROR_FILE_NOT_FOUND || error==ERROR_PATH_NOT_FOUND ? S_FALSE : HRESULT_FROM_WIN32(error);}
+    size=GetFileSize(file,NULL);
+    if(!size || size>64*1024*1024){CloseHandle(file);return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);}
+    *symbols=SafeArrayCreateVector(VT_UI1,0,size);
+    if(!*symbols){CloseHandle(file);return E_OUTOFMEMORY;}
+    hr=SafeArrayAccessData(*symbols,&data);
+    if(SUCCEEDED(hr)){if(!ReadFile(file,data,size,&read,NULL))hr=HRESULT_FROM_WIN32(GetLastError());else if(read!=size)hr=HRESULT_FROM_WIN32(ERROR_HANDLE_EOF);SafeArrayUnaccessData(*symbols);}
+    CloseHandle(file);
+    if(FAILED(hr)){SafeArrayDestroy(*symbols);*symbols=NULL;}
+    return hr;
+}
 
 static HRESULT run(HINSTANCE instance, int *exit_code, const wchar_t **stage) {
     ICorRuntimeHost *runtime = NULL;
     IUnknown *domain = NULL, *domain_api = NULL, *assembly = NULL, *assembly_api = NULL;
     IUnknown *method = NULL, *method_api = NULL;
-    SAFEARRAY *bytes = NULL;
+    SAFEARRAY *bytes = NULL, *symbols = NULL;
     VARIANT target, result;
     HRESULT hr;
     void *destination;
@@ -51,7 +74,10 @@ static HRESULT run(HINSTANCE instance, int *exit_code, const wchar_t **stage) {
     if (FAILED(hr = SafeArrayAccessData(bytes, &destination))) goto done;
     CopyMemory(destination, source, size);
     SafeArrayUnaccessData(bytes);
-    if (FAILED(hr = ((LoadBytes)slot(domain_api, APP_DOMAIN_LOAD_BYTES))(domain_api, bytes, &assembly))) goto done;
+    if(FAILED(hr=read_symbols(&symbols)))goto done;
+    if(symbols)hr=((LoadSymbols)slot(domain_api,APP_DOMAIN_LOAD_SYMBOLS))(domain_api,bytes,symbols,&assembly);
+    else hr=((LoadBytes)slot(domain_api,APP_DOMAIN_LOAD_BYTES))(domain_api,bytes,&assembly);
+    if(FAILED(hr))goto done;
     if (FAILED(hr = IUnknown_QueryInterface(assembly, &assembly_iid, (void **)&assembly_api))) goto done;
     if (FAILED(hr = ((EntryPoint)slot(assembly_api, ASSEMBLY_ENTRY_POINT))(assembly_api, &method))) goto done;
     if (!method) { hr = E_UNEXPECTED; goto done; }
@@ -70,6 +96,7 @@ done:
     if (assembly_api) IUnknown_Release(assembly_api);
     if (assembly) IUnknown_Release(assembly);
     if (bytes) SafeArrayDestroy(bytes);
+    if (symbols) SafeArrayDestroy(symbols);
     if (domain_api) IUnknown_Release(domain_api);
     if (domain) IUnknown_Release(domain);
     if (runtime) ICorRuntimeHost_Release(runtime);
@@ -85,7 +112,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR arguments, int
     if (FAILED(hr)) {
         wchar_t message[256];
         swprintf(message, 256, L"Error 0x%08lX while %ls.", (unsigned long)hr, stage);
-        if (!wcsstr(arguments, L"--self-test") && !wcsstr(arguments, L"--window-smoke") && !wcsstr(arguments, L"--preview-worker") && !wcsstr(arguments, L"--draft-worker") && !wcsstr(arguments, L"--stego-source-worker") && !wcsstr(arguments, L"--verify-previews") && !wcsstr(arguments, L"--verify-import"))
+        if (!wcsstr(arguments, L"--self-test") && !wcsstr(arguments, L"--window-smoke") && !wcsstr(arguments, L"--preview-worker") && !wcsstr(arguments, L"--draft-worker") && !wcsstr(arguments, L"--stego-source-worker") && !wcsstr(arguments, L"--verify-") && !wcsstr(arguments, L"--create-database"))
             MessageBoxW(NULL, message, L"Media Compliance Reviewer could not start", MB_OK | MB_ICONERROR);
         fwprintf(stderr, L"%ls\n", message);
         return 1;

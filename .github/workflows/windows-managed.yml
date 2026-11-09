@@ -1,0 +1,28 @@
+name: Windows managed build
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  managed:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile optimized C# 5 with symbols
+        shell: powershell
+        run: ./build.ps1 -ManagedOnly
+      - name: Run noninteractive managed checks
+        shell: powershell
+        run: ./tests/Run.ps1 -ManagedOnly
+      - name: Keep matching assembly, symbols, and check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-managed-diagnostics
+          path: |
+            .build/Application.exe
+            .build/Application.pdb
+            .build/regression-*/results.json
+          if-no-files-found: error

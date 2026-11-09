@@ -8,7 +8,7 @@ namespace MediaReviewer {
     public sealed class ReviewPreferences {
         public int PageSize=60,WorkerCount=4,ModifiedAgeYears;
         public string Fit="Uniform",Mode="Quick",Reviewer="",Warning="",DefaultSourceRoot="";
-        public bool IncludeApplicationData,IncludeRootFiles=true,ScanArchives,SniffRenamed=true,FullHashScans,ReadOnly;
+        public bool IncludeApplicationData,IncludeRootFiles=true,ScanArchives,SniffRenamed=true,ReadOnly;
         public string[] Families=Formats.Families.Where(f=>f.Key!="raw").Select(f=>f.Key).ToArray();
         public string Signature {get{Validate();return Digest();}}
         internal long Cost {get{return 1024+2L*(Reviewer.Length+Warning.Length+DefaultSourceRoot.Length+String.Join(",",Families).Length);}}
@@ -27,7 +27,7 @@ namespace MediaReviewer {
                 {"age",ModifiedAgeYears.ToString(CultureInfo.InvariantCulture)},{"fit",Fit},{"mode",Mode},{"reviewer",Reviewer},
                 {"families",String.Join(",",Families.OrderBy(k=>Array.FindIndex(Formats.Families,f=>f.Key==k)))},
                 {"appdata",IncludeApplicationData ? "1" : "0"},{"root_files",IncludeRootFiles ? "1" : "0"},{"zip",ScanArchives ? "1" : "0"},{"default_source",DefaultSourceRoot},
-                {"sniff_renamed",SniffRenamed ? "1" : "0"},{"full_hash",FullHashScans ? "1" : "0"}
+                {"sniff_renamed",SniffRenamed ? "1" : "0"}
             };
         }
         // Length-prefix fields so embedded punctuation and newlines have one unambiguous identity.
@@ -58,7 +58,7 @@ namespace MediaReviewer {
                     case "root_files":if(value=="1" || value=="0")p.IncludeRootFiles=value=="1";else valid=false;break;
                     case "zip":if(value=="1" || value=="0")p.ScanArchives=value=="1";else valid=false;break;
                     case "sniff_renamed":if(value=="1" || value=="0")p.SniffRenamed=value=="1";else valid=false;break;
-                    case "full_hash":if(value=="1" || value=="0")p.FullHashScans=value=="1";else valid=false;break;
+                    case "full_hash":break; // Legacy preference is preserved but cannot enable sampling.
                     case "default_source":p.DefaultSourceRoot=value;break;
                 }invalid|=!valid;
             }

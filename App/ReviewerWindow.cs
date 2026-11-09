@@ -34,6 +34,8 @@ namespace MediaReviewer {
             internal long Cost;
         }
         bool undoInFlight;
+        bool uiFailureClosing;
+        DispatcherTimer failureCloseTimer;
         ReviewerEngine engine,closingDatabase;
         StatusSnapshot status;
         string pageRequest,task,draftTask,preferencesSignature;
@@ -66,6 +68,25 @@ namespace MediaReviewer {
         void Message(string value){Text("MessageText",value);}
         bool Ready {get{return engine!=null && engine.Ready && !engine.Faulted && !closing && !switchingCatalog;}}
         static string Id(){return Guid.NewGuid().ToString("N");}
+        void InvalidateThumbnails(){foreach(var card in cards)card.ImageQueued=false;view.Advance();}
+        internal bool HandleUiFailure(Exception error){
+            FailureDiagnostics.Record("Desktop callback",error);
+            if(error is PresentationFailureException && !uiFailureClosing){Message(error.Message);return true;}
+            if(uiFailureClosing)return false;
+            uiFailureClosing=true;
+            // Gate writes before touching more presentation state; this path never saves preferences.
+            if(engine!=null)engine.FailStop(error);
+            if(closingDatabase!=null)closingDatabase.FailStop(error);
+            timer.Stop();Window.IsEnabled=false;pending.Clear();
+            loader.CloseAsync();paneLoader.CloseAsync();galleryAnimationTimer.Stop();galleryAnimations.CloseAsync();StopStegoPackage();
+            Message("Review stopped safely. Close and reopen the database before continuing. Committed work is retained; inspect any unconfirmed output before retrying.");
+            failureCloseTimer=new DispatcherTimer(DispatcherPriority.Background,Window.Dispatcher){Interval=TimeSpan.FromMilliseconds(100)};
+            failureCloseTimer.Tick+=(s,e)=>{if(engine!=null && !engine.Closed || closingDatabase!=null && !closingDatabase.Closed || !loader.Closed || !paneLoader.Closed || !galleryAnimations.Closed)return;failureCloseTimer.Stop();allowClose=true;Window.Close();};
+            failureCloseTimer.Start();
+            if(Window.IsVisible)MessageBox.Show(Window,"Review stopped because an unexpected error left the current screen uncertain. The database is closing. Reopen it before continuing, and inspect any unconfirmed output before retrying.","Review stopped safely",MessageBoxButton.OK,MessageBoxImage.Error);
+            return true;
+        }
+        void TickSafely(){try{Tick();}catch(Exception error){if(!HandleUiFailure(error))throw;}}
 
         internal ReviewerWindow(Window window,bool persistWorkspace=true) {
             Window=window;
@@ -75,7 +96,7 @@ namespace MediaReviewer {
             selection=new GallerySelection(Get<ScrollViewer>("GalleryScroll"),list,cards);
             selection.Changed+=(s,e)=>UpdateControls();
             timer=new DispatcherTimer(DispatcherPriority.Background,window.Dispatcher){Interval=TimeSpan.FromMilliseconds(100)};
-            timer.Tick+=(s,e)=>Tick();timer.Start();
+            timer.Tick+=(s,e)=>TickSafely();timer.Start();
             window.Closing+=Closing;
             Click("CatalogButton",ChooseDatabase);
             Click("BrowseButton",()=>{string selected=ChooseFolder("Choose a media source",Box("SourceBox").Text);if(selected!=null)Box("SourceBox").Text=selected;});
@@ -145,7 +166,10 @@ namespace MediaReviewer {
             Window.SizeChanged+=(s,e)=>Get<FrameworkElement>("TopControls").MaxHeight=Math.Max(220,Math.Min(400,Window.ActualHeight*0.44));
             summarize();
         }
-        void Guard(Action action){try{action();}catch(Exception e){Message(e.GetBaseException().Message);}}
+        void Guard(Action action){try{action();}catch(Exception e){
+            bool expected=!(e is DatabaseException) && !(e is UncertainDatabaseStateException) && (e is IOException || e is ArgumentException || e is OperationCanceledException || e is ProtectedDetailsException || e.GetType()==typeof(InvalidOperationException));
+            if(expected)Message(FailureDiagnostics.Brief(e));else if(!HandleUiFailure(e))throw;
+        }}
         void Queue(string id,Action<UiResult> action){pending.Add(id,action);}
         void Work(string id,string label,Action<UiResult> complete=null,bool notifyOnFailure=false) {
             task=id;Message(label+" queued…");
@@ -205,7 +229,7 @@ namespace MediaReviewer {
         void StartOpen(string path,bool create,string html) {
             if(inspector!=null)inspector.Close();
             if(protectedWindow!=null)protectedWindow.Close();
-            ClearCards();pending.Clear();undoStack.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;
+            ClearCards();ClearWorkspaceNoteDrafts();pending.Clear();undoStack.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;
             Combo("ViewBox").SelectedIndex=0;
             marqoThreshold=DraftReview.DefaultMarqoThreshold;gemmaThreshold=DraftReview.DefaultGemmaThreshold;gemmaCriteria="";useGemma=false;gemmaCpuOnly=false;gemmaSettingsLoaded=false;gemmaAvailable=DraftModelWorker.GemmaAvailable();
             pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
@@ -228,7 +252,7 @@ namespace MediaReviewer {
                 Box("ReviewerBox").Text=String.IsNullOrEmpty(r.Preferences.Reviewer) ? WindowsReviewerLabel() : r.Preferences.Reviewer;Box("AgeBox").Text=r.Preferences.ModifiedAgeYears.ToString(CultureInfo.InvariantCulture);
                 options.Families=r.Preferences.Families;options.IncludeApplicationData=r.Preferences.IncludeApplicationData;
                 options.IncludeRootFiles=r.Preferences.IncludeRootFiles;options.ScanArchives=r.Preferences.ScanArchives;
-                options.SniffRenamed=r.Preferences.SniffRenamed;options.FullHashScans=r.Preferences.FullHashScans;
+                options.SniffRenamed=r.Preferences.SniffRenamed;
                 options.DefaultSourceRoot=r.Preferences.DefaultSourceRoot;
                 if(String.IsNullOrWhiteSpace(Box("SourceBox").Text))Box("SourceBox").Text=options.DefaultSourceRoot;
                 Text("PreferencesText",String.IsNullOrEmpty(r.Preferences.Warning) ? "Preferences loaded for this database." : r.Preferences.Warning);
@@ -250,7 +274,7 @@ namespace MediaReviewer {
             string mode=Mode();
             var request=new ScanOptions {RootPath=Box("SourceBox").Text.Trim(),WorkerCount=Number("WorkerBox"),ModifiedAgeYears=Age(),
                 ExcludeApplicationData=mode!="Deep" && !options.IncludeApplicationData,IncludeRootFiles=options.IncludeRootFiles,ScanArchives=options.ScanArchives,SniffRenamed=options.SniffRenamed,
-                FingerprintPolicy=options.FullHashScans ? FingerprintPolicy.Full() : new FingerprintPolicy(),
+                FingerprintPolicy=FingerprintPolicy.Full(),
                 Extensions=mode=="Quick" ? Formats.Quick : mode=="Deep" ? Formats.Deep : options.Families.SelectMany(Formats.Filter).ToArray()};
             engine.StartScan(request);Message("Scan queued…");
         }
@@ -402,7 +426,7 @@ namespace MediaReviewer {
                         window.Close();
                 if(r.Success){
                     if(!fromEvidence && destination!="EVIDENCE")RememberUndo(undoSnapshots,r.ReviewRevisions);
-                    if(destination=="NON_COMPLIANT" && Get<CheckBox>("AutoClearNotesBox").IsChecked==true && notes==null)Box("NotesBox").Clear();
+                    if(notes==null)ForgetWorkspaceNoteDrafts(request.GroupIds);
                     refresh=true;
                 }
                 if(done!=null)done(r);
@@ -479,7 +503,7 @@ namespace MediaReviewer {
                 }
                 if(!view.Accept(media.Generation))continue;
                 CardItem card=cards.FirstOrDefault(c=>c.Record.GroupId==media.GroupId && c.Record.ContentId==media.ContentId && c.Record.PreviewRevision==media.PreviewRevision);
-                if(card!=null){card.SetImage(media.Image,media.Error);if(media.Image!=null)card.Record.PreviewBytes=null;}
+                if(card!=null){try{card.SetImage(media.Image,media.Error);}catch(FileFormatException error){card.SetImage(null,"Preview could not be displayed");throw new PresentationFailureException(error);}if(media.Image!=null)card.Record.PreviewBytes=null;}
             }
             DrainPanePreview();
             var focus=FocusedCard();
@@ -514,7 +538,7 @@ namespace MediaReviewer {
                 if(pending.TryGetValue(result.RequestId,out action)){pending.Remove(result.RequestId);action(result);}
                 else if(result.Kind=="VideoSource")PlaybackProxy.Release(result.Value);
             }
-            catch(Exception e){Message(e.GetBaseException().Message);}
+            catch(Exception e){if(!HandleUiFailure(e))throw;}
             finally{if(result.Evidence!=null)result.Evidence.Dispose();}
         }
 
@@ -595,6 +619,6 @@ namespace MediaReviewer {
             timer.Stop();allowClose=true;Window.Close();
         }
 
-        public void Dispose(){timer.Stop();galleryAnimationTimer.Stop();galleryAnimations.Dispose();selection.Dispose();if(!loader.Closed)loader.Dispose();if(!paneLoader.Closed)paneLoader.Dispose();DisposeStegoPackage();if(engine!=null && !engine.Closed)engine.Dispose();}
+        public void Dispose(){timer.Stop();if(failureCloseTimer!=null)failureCloseTimer.Stop();galleryAnimationTimer.Stop();galleryAnimations.Dispose();selection.Dispose();if(!loader.Closed)loader.Dispose();if(!paneLoader.Closed)paneLoader.Dispose();DisposeStegoPackage();if(engine!=null && !engine.Closed)engine.Dispose();if(closingDatabase!=null && !closingDatabase.Closed)closingDatabase.Dispose();}
     }
 }

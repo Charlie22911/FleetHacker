@@ -40,6 +40,7 @@ EXPORTS
     sqlite3_column_blob
     sqlite3_column_bytes
     sqlite3_changes
+    sqlite3_get_autocommit
     sqlite3_last_insert_rowid
     sqlite3_backup_init
     sqlite3_backup_step

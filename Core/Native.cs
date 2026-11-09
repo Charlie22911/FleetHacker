@@ -90,6 +90,8 @@ namespace MediaReviewer {
         internal static readonly sqlite3_column_bytes_call sqlite3_column_bytes=Native.Export<sqlite3_column_bytes_call>("sqlite3_column_bytes");
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int sqlite3_changes_call(IntPtr db);
         internal static readonly sqlite3_changes_call sqlite3_changes=Native.Export<sqlite3_changes_call>("sqlite3_changes");
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int sqlite3_get_autocommit_call(IntPtr db);
+        internal static readonly sqlite3_get_autocommit_call sqlite3_get_autocommit=Native.Export<sqlite3_get_autocommit_call>("sqlite3_get_autocommit");
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate long sqlite3_last_insert_rowid_call(IntPtr db);
         internal static readonly sqlite3_last_insert_rowid_call sqlite3_last_insert_rowid=Native.Export<sqlite3_last_insert_rowid_call>("sqlite3_last_insert_rowid");
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr sqlite3_backup_init_call(IntPtr target,byte[] targetName,IntPtr source,byte[] sourceName);
@@ -126,6 +128,8 @@ namespace MediaReviewer {
             Sql.sqlite3_extended_result_codes(Handle,1); Sql.sqlite3_busy_timeout(Handle,3000);
         }
         internal void CheckOwner() { if(Handle==IntPtr.Zero) throw new ObjectDisposedException("SQLite connection"); if(owner!=System.Threading.Thread.CurrentThread.ManagedThreadId) throw new InvalidOperationException("SQLite connection belongs to another worker"); }
+        internal bool AutoCommit {get{CheckOwner();return Sql.sqlite3_get_autocommit(Handle)!=0;}}
+        internal void ConfirmRollback(){if(!AutoCommit)Execute("ROLLBACK");if(!AutoCommit)throw new InvalidOperationException("SQLite still has an active transaction after rollback");}
         internal void Check(int rc) { if(rc!=0 && rc!=100 && rc!=101) throw new DatabaseException(rc,Native.Utf8(Sql.sqlite3_errmsg(Handle))); }
         public void Script(string sql) {
             CheckOwner(); IntPtr error; int rc=Sql.sqlite3_exec(Handle,Native.Text(sql),IntPtr.Zero,IntPtr.Zero,out error);

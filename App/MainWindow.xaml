@@ -386,9 +386,9 @@
         <StackPanel Margin="18,4,0,2">
           <WrapPanel>
             <TextBlock Text="Your name" VerticalAlignment="Center" Margin="3"/><TextBox x:Name="ReviewerBox" Width="165" MaxLength="128" AutomationProperties.Name="Reviewer label"/>
-            <TextBlock Text="Note" VerticalAlignment="Center" Margin="3"/><TextBox x:Name="NotesBox" Width="250" AutomationProperties.Name="Decision notes" ToolTip="Friendly note saved with your review decision"/>
-            <CheckBox x:Name="AutoClearNotesBox" Content="Clear note after flagging" ToolTip="Automatically clear the Note box after flagging an item so the note isn't reused by accident"/>
+
           </WrapPanel>
+          <TextBox x:Name="NotesBox" Height="112" MaxLength="16384" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" HorizontalAlignment="Stretch" AutomationProperties.Name="Decision notes" ToolTip="Draft for these selected items. Changing the selection keeps a separate draft."/>
           <WrapPanel Margin="0,3,0,0">
             <TextBlock Text="Quick notes:" Foreground="{DynamicResource MutedBrush}" FontSize="11.5" VerticalAlignment="Center" Margin="3,0,5,0"/>
             <Button x:Name="NoteTagPersonalButton" Content="+ Personal media" Style="{StaticResource ChipButton}" Tag="Personal media"/>

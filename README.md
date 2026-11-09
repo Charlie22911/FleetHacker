@@ -21,9 +21,9 @@ The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. 
 
 ## Optional hidden data analysis
 
-An optional Windows [hidden data analysis package](steganography/README.md) checks unchecked photos throughout the database with Aletheia color models, zsteg and native Binwalk. Suspect photos appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
+An optional Windows [hidden data analysis package](steganography/README.md) checks all unchecked photos or a selected set with Aletheia color models, zsteg and native Binwalk. High-confidence findings appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
 
-The current preview flags unconfirmed indicators as well as validated payloads. Review each finding before making a compliance decision. Long notes can expand the Inspect controls.
+Automatic classification defaults to 90%. Verified embedded files qualify directly. Statistical and weak findings remain saved leads while reliable model confidence is unavailable; the current model outputs are not calibrated confidence percentages. Review findings before making a compliance decision.
 
 ## Download Gemma for advanced AI review
 
@@ -36,7 +36,7 @@ The current preview flags unconfirmed indicators as well as validated payloads. 
 
 1. At startup or in the sidebar, choose **Open or create database**. Select an existing SQLite database to open it, or enter a new filename on a local drive to create one. Choose **Later** to skip the startup prompt. When opening a final HTML database, choose a new local filename for the Windows copy.
 2. Enter a local folder, mapped drive or UNC media share under **Source root**. In **Maintenance**, use **Use current source path as default** to save it in the database. You can temporarily enter a different path on another machine. Use **Reconnect all sources** to verify a replacement root for previously recorded locations.
-3. Start or resume a scan, then choose a review queue from the sidebar or compact **View** dropdown. New databases scan root-level media and check headers on ordinary files with unknown extensions by default. Change either setting or enable full SHA-256 under **Options**. Saved database preferences and resumed scan settings are preserved.
+3. Start or resume a scan, then choose a review queue from the sidebar or compact **View** dropdown. New databases scan root-level media and check headers on ordinary files with unknown extensions by default. Change either setting under **Options**. New scans and resumed scans use complete SHA-256 fingerprints. Saved database preferences and resumed scan settings are preserved.
 4. Click a List column to sort the current queue or choose **Thumbnails** for an adjustable grid. Double-click an item to open **Inspect / video** without changing the gallery view. Choose **Quick Review** in the sidebar to review one item at a time. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. A cue appears during a drag when the gesture is ready. Quick Review advances when the decision is saved. Press **C** or **N** outside an editor for the corresponding decision in any view.
 5. Use **Details / notes** or **Inspect** to open an item while scanning. Scroll over a photo to zoom and drag to pan when zoomed. In **Inspect / video** and **Quick Review**, move the pointer over the media to reveal playback controls. You can play, pause, stop, seek, skip ten seconds, change volume, mute, or cycle speed from 1× to 2×. Click the video or press **Space** with the preview focused to play or pause. Playback starts on demand. Windows-supported videos prepare in a paused state after selection. Inspect and Quick Review keep the saved poster visible until playback starts and show a message when there is no poster. Stop playback or leave the item to release the source file. Use the vault to retain originals and capture Evidence.
 
@@ -54,7 +54,9 @@ Playback preparation runs separately from exports and other long database tasks.
 
 ZIP previews and playback copies use a private temporary directory. The app checks for abandoned copies in the background when it starts. An open instance or media helper keeps its directory leased until it has finished using it.
 
-**Details / notes** lists each recorded path with its source root and refreshes the list after a scan. An **Exact match** row shows the same full SHA-256 on another review card. A **Candidate** row shows the same sampled fingerprint on another card and still needs full verification. A Quick scan can verify a new copy against a full fingerprint already in the database.
+**Details / notes** lists each recorded path with its source root and refreshes the list after a scan. An **Exact match** row shows the same full SHA-256 on another review card. A **Candidate** row shows the same sampled fingerprint on another card and still needs full verification. Legacy sampled identities remain readable but require verification from their recorded original before they can establish an exact match.
+
+Notes have a separate collapsible editor with bounded scrolling, so long text does not stretch review buttons. Unsaved item notes stay with their selection during the session.
 
 In Inspect, press **Left** or **Right** to browse items on the current page, **Up** for Compliant, or **Down** for Non-compliant. Inspect advances to the next item on the page after a successful decision. Text fields and video controls keep their own keyboard behavior. Choose **Full screen** or press **F** or **F11** in Inspect or Quick Review. You can keep browsing and marking items in full screen. Press **Esc** to restore the window.
 
@@ -66,7 +68,7 @@ Open **Details / notes** on an Evidence item to unlock and read its authenticate
 
 The left sidebar holds the review queues, view modes, and database tools. Click the integrated border arrow at the middle of the sidebar’s right edge, the preview’s left edge, or the top controls’ bottom edge to collapse or reopen that section. The **View** dropdown remains available when the sidebar is closed. In List or Thumbnails, drag the thin preview divider immediately to the left of its arrow to resize the pane. You can also focus the divider with Tab and use the arrow keys. The app remembers the width when it closes.
 
-Use **Maintenance > Sources / reconnect** to check and apply a replacement folder for one root. **Reconnect all sources** handles bulk checks. **Preview tasks** shows the outcome for each item and lets you resume or discard unfinished work. **Export review report** offers CSV and offline HTML, with optional plaintext Evidence details after vault unlock. Select a Non-compliant item for its **Case sheet**, which keeps reviewer and Windows file owner distinct.
+Use **Maintenance > Sources / reconnect** to check and apply a replacement folder for one root. **Reconnect all sources** automatically connects roots only when every checked file is a full match. Roots with candidate, missing or failed files remain available for explicit review in **Sources / reconnect**. **Preview tasks** shows the outcome for each item and lets you resume or discard unfinished work. **Export review report** offers CSV and offline HTML, with optional plaintext Evidence details after vault unlock. Select a Non-compliant item for its **Case sheet**, which keeps reviewer and Windows file owner distinct.
 
 If a reconnect points to a different folder, start a fresh scan there. **Resume** requires the original source for its saved manifest. When retrying a preview or retaining an original from a full SHA-256 card, the app can try another recorded copy if the preferred source is unavailable. Retention verifies the chosen copy's full SHA-256 before saving it.
 
@@ -112,6 +114,8 @@ wsl.exe -d Ubuntu-24.04 -- bash native/build-gemma.sh
 .\build.ps1
 .\tests\Smoke.ps1 -Executable '.\dist\Media Compliance Reviewer.exe'
 ```
+
+The [Windows regression guide](tests/README.md) describes the managed CI checks, full Windows test entry point, optional fixtures and matching diagnostic symbols.
 
 The smoke test copies and renames the executable, checks the database and review lifecycle with generated media, opens the WPF gallery, and checks the application and redirected temp directories for extra files. Pass generated media via `-PreviewFixtures` to test additional formats. Pass `-PlaybackFixtures` with a directory containing a generated `legacy.flv` with audio and a short looping `animated.gif` to check offline playback. Include a generated `audio.webm` with Opus audio to verify WebM playback. Add 6,000 × 1,000 `wide.webp`, 1,000 × 6,000 `tall.webp`, and 4,000 × 4,000 `square.webp` fixtures with simple content to exercise the linked decoder's size bounds.
 

@@ -112,7 +112,7 @@ namespace MediaReviewer {
             Click("ThumbnailsModeButton",()=>SetView(ReviewView.Thumbnails));
             Click("QuickModeButton",()=>OpenQuick(FocusedCard()));
             Click("SteganographyButton",ShowStegoPackage);
-            Click("RefreshViewButton",()=>{view.Advance();refresh=true;ResetPanePreview();foreach(var card in cards)card.ImageQueued=false;});
+            Click("RefreshViewButton",()=>{InvalidateThumbnails();refresh=true;ResetPanePreview();});
             Click("QueueSidebarButton",()=>{workspace.SidebarCollapsed=!workspace.SidebarCollapsed;UpdateWorkspace();});
             Click("TopControlsButton",()=>{workspace.TopCollapsed=!workspace.TopCollapsed;UpdateWorkspace();});
             Click("PreviewPaneButton",()=>{workspace.PreviewCollapsed=!workspace.PreviewCollapsed;UpdateWorkspace();});
@@ -143,6 +143,8 @@ namespace MediaReviewer {
             Window.SourceInitialized+=(s,e)=>RestoreBounds();
             Get<Slider>("ThumbnailSize").Value=workspace.TileSize>=160 && workspace.TileSize<=320 ? workspace.TileSize : 220;
             SetView(workspace.Thumbnails ? ReviewView.Thumbnails : ReviewView.List);
+            Action boundNotes=()=>Box("NotesBox").Height=Math.Min(112,Math.Max(24,Window.ActualHeight*.25));
+            Window.SizeChanged+=(s,e)=>boundNotes();boundNotes();
         }
 
         internal sealed class ThemeDefinition {
@@ -238,7 +240,7 @@ namespace MediaReviewer {
             ApplyQuickTransform();
         }
         void RotateQuick(int deltaDegrees){
-            if(display!=ReviewView.Quick || QuickCard()==null)return;
+            if(display!=ReviewView.Quick || QuickCard()==null || Formats.IsPlayable(QuickCard().Record.Extension))return;
             quickRotation=((quickRotation+deltaDegrees)%360+360)%360;
             ApplyQuickTransform();
         }
@@ -409,6 +411,7 @@ namespace MediaReviewer {
 
         void UpdateWorkspace() {
             if(workspace==null)return;
+            SyncWorkspaceNoteDraft();
             bool full=quickFullScreen!=null && quickFullScreen.Active;
             var chrome=full ? Visibility.Collapsed : Visibility.Visible;
             foreach(string name in new[]{"SidebarEdge","TopHeaderBar","TopControlsEdge","PaginationBar","StatusPanel"})
@@ -461,6 +464,42 @@ namespace MediaReviewer {
             Button("ThumbnailsModeButton").IsEnabled=display!=ReviewView.Thumbnails;
             Button("QuickModeButton").IsEnabled=Ready && focus!=null && display!=ReviewView.Quick;
             Button("RefreshViewButton").IsEnabled=Ready;
+        }
+
+        sealed class WorkspaceNoteDraft { internal long[] Groups;internal string Text; }
+        readonly Dictionary<string,WorkspaceNoteDraft> workspaceNoteDrafts=new Dictionary<string,WorkspaceNoteDraft>();
+        string workspaceNoteKey;
+        long[] workspaceNoteGroups=new long[0];
+        bool swappingWorkspaceNote;
+        void SyncWorkspaceNoteDraft(){
+            if(swappingWorkspaceNote)return;
+            var rows=(display==ReviewView.Quick ? new[]{QuickCard()}.Where(c=>c!=null) : cards.Where(c=>c.IsSelected)).Select(c=>c.Record).OrderBy(r=>r.GroupId).ToArray();
+            string key=String.Join(";",rows.Select(r=>r.GroupId+":"+r.ContentId));
+            if(key==workspaceNoteKey)return;
+            var notes=Box("NotesBox");
+            swappingWorkspaceNote=true;
+            try{
+                if(workspaceNoteKey!=null){
+                    if(String.IsNullOrEmpty(notes.Text))workspaceNoteDrafts.Remove(workspaceNoteKey);
+                    else workspaceNoteDrafts[workspaceNoteKey]=new WorkspaceNoteDraft {Groups=workspaceNoteGroups,Text=notes.Text};
+                }
+                workspaceNoteKey=key;workspaceNoteGroups=rows.Select(r=>r.GroupId).ToArray();
+                WorkspaceNoteDraft draft;
+                notes.Text=workspaceNoteDrafts.TryGetValue(key,out draft) ? draft.Text : "";
+                // Each editor is bounded to 16,384 characters. Preserve existing drafts
+                // when the 128-draft cap is reached and stop accepting a new one.
+                notes.IsReadOnly=workspaceNoteDrafts.Count>=128 && !workspaceNoteDrafts.ContainsKey(key);
+                if(notes.IsReadOnly)Message("128 unsaved note drafts are open. Save or clear a draft before adding another.");
+            }finally{swappingWorkspaceNote=false;}
+        }
+        void ClearWorkspaceNoteDrafts(){
+            workspaceNoteDrafts.Clear();workspaceNoteKey=null;workspaceNoteGroups=new long[0];Box("NotesBox").Clear();Box("NotesBox").IsReadOnly=false;
+        }
+        void ForgetWorkspaceNoteDrafts(long[] groups){
+            var ordered=groups.OrderBy(id=>id).ToArray();
+            foreach(string key in workspaceNoteDrafts.Where(pair=>pair.Value.Groups.SequenceEqual(ordered)).Select(pair=>pair.Key).ToArray())workspaceNoteDrafts.Remove(key);
+            if(workspaceNoteGroups.SequenceEqual(ordered))Box("NotesBox").Clear();
+            Box("NotesBox").IsReadOnly=workspaceNoteDrafts.Count>=128 && !workspaceNoteDrafts.ContainsKey(workspaceNoteKey??"");
         }
 
         void SetPaneTab(string name,string direction,string action) {

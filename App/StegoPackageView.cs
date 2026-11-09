@@ -50,13 +50,23 @@ namespace MediaReviewer {
             stegoWindow=CreateStegoWindow();if(stegoWindow==null)return;
             stegoWindow.Closed+=(s,e)=>stegoWindow=null;stegoWindow.Show();
         }
-        internal Window CreateStegoWindow(Func<string> scanStart=null){
+        internal Window CreateStegoWindow(Func<StegoScanOptions,string> scanStart=null){
             if(stegoPackage==null || !Ready || engine==null)return null;
+            long[] selectedPhotos=Selected().Where(c=>c.Record.Status!="EVIDENCE" && Formats.Deep.Contains(c.Record.Extension) && !Formats.IsVideo(c.Record.Extension)).Select(c=>c.Record.GroupId).Distinct().ToArray();
             var database=engine;var body=new DockPanel {Margin=new Thickness(20)};
-            var dialog=Dialog("Hidden data scan",body,730,600);dialog.Name="StegoScanWindow";TrackDatabaseWindow(dialog);
+            var dialog=Dialog("Hidden data scan",body,760,730);dialog.Name="StegoScanWindow";TrackDatabaseWindow(dialog);
             var heading=new StackPanel();Dock(body,heading,System.Windows.Controls.Dock.Top);
             heading.Children.Add(new TextBlock {Text="Check photos for hidden data",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,6)});
-            heading.Children.Add(Label("Check unchecked photos. Suspect photos appear in Steganography with scan details in their notes."));
+            heading.Children.Add(Label("Scan photos for hidden data. High-confidence findings appear in Steganography. All findings are saved."));
+            var scope=new StackPanel {Margin=new Thickness(0,4,0,8)};heading.Children.Add(scope);
+            var all=new RadioButton {Name="StegoAllPhotos",Content="Scan all unchecked photos",IsChecked=true,Margin=new Thickness(0,3,0,3)};
+            var selectedMode=new RadioButton {Name="StegoSelectedPhotos",Content="Scan selected photos ("+selectedPhotos.Length+")",IsEnabled=selectedPhotos.Length>0,Margin=new Thickness(0,3,0,3)};
+            scope.Children.Add(all);scope.Children.Add(selectedMode);
+            scope.Children.Add(Label("Selected photos are checked again. Reopen this window to update the selection."));
+            var thresholdLabel=Label("Automatic classification confidence: 90%");heading.Children.Add(thresholdLabel);
+            var threshold=new Slider {Name="StegoConfidenceSlider",Minimum=50,Maximum=100,Value=90,TickFrequency=1,IsSnapToTickEnabled=true,SmallChange=1,LargeChange=5,Margin=new Thickness(0,0,0,5)};heading.Children.Add(threshold);
+            var apply=ActionButton("Apply to saved findings",()=>{});apply.Name="StegoApplyConfidence";apply.HorizontalAlignment=HorizontalAlignment.Left;heading.Children.Add(apply);
+            heading.Children.Add(Label("Current model findings stay saved as leads at every setting. Verified hidden files qualify automatically."));
             var counts=Label("Finding unchecked photos…");counts.Name="StegoCountLabel";heading.Children.Add(counts);
             var actions=new WrapPanel {Margin=new Thickness(0,0,0,4)};heading.Children.Add(actions);
             var start=ActionButton("Start scan",()=>{});start.Name="StegoStartButton";start.IsEnabled=false;start.IsDefault=true;start.Style=(Style)Window.FindResource("PrimaryButton");actions.Children.Add(start);
@@ -83,12 +93,14 @@ namespace MediaReviewer {
             results.Columns.Add(new DataGridTextColumn {Header="Result",Binding=new Binding("Outcome"),Width=180});
             results.Columns.Add(new DataGridTextColumn {Header="Last checked",Binding=new Binding("CheckedAt"),Width=145});
             var list=new DockPanel();list.Children.Add(results);body.Children.Add(list);
-            int page=1;bool loaded=false,query=false,closed=false;StegoScanState state=null;string lastTask=null,outcome=null;long seenRevision=-1;
+            int page=1;bool loaded=false,query=false,closed=false,confidenceLoaded=false;StegoScanState state=null;string lastTask=null,outcome=null;long seenRevision=-1;
             Action refresh=()=>{};Action update=()=>{
                 if(closed)return;bool valid=Ready && ReferenceEquals(engine,database);bool scanning=valid && database.StegoAnalysisActive;
                 bool package=stegoPackage!=null && stegoPackage.Trusted && stegoPackage.Compatible && stegoPackage.Ready;
+                if(loaded && state!=null)counts.Text=selectedMode.IsChecked==true ? selectedPhotos.Length+" selected photo"+(selectedPhotos.Length==1 ? "" : "s")+" to check again" : state.Pending.ToString("N0")+" photo"+(state.Pending==1 ? "" : "s")+" to check · "+state.Checked.ToString("N0")+" checked";
                 bool busy=valid && (database.Status.RunningScan || database.DraftReviewActive || task!=null || database.ReportActive);
-                start.IsEnabled=valid && package && loaded && state!=null && state.Pending>0 && !scanning && !busy;
+                start.IsEnabled=valid && package && loaded && state!=null && (selectedMode.IsChecked==true ? selectedPhotos.Length>0 : state.Pending>0) && !scanning && !busy;
+                scope.IsEnabled=threshold.IsEnabled=apply.IsEnabled=valid && loaded && !scanning && !busy;
                 stop.Visibility=scanning ? Visibility.Visible : Visibility.Collapsed;stop.IsEnabled=scanning && stegoTask!=null;
                 previous.IsEnabled=!query && page>1;next.IsEnabled=!query && state!=null && state.More;
                 progress.Visibility=scanning ? Visibility.Visible : Visibility.Collapsed;
@@ -104,13 +116,16 @@ namespace MediaReviewer {
                 try{Queue(database.RequestStegoScanState(page),r=>{
                     query=false;if(closed || !ReferenceEquals(engine,database))return;
                     if(!r.Success){feedback.Text="Photo information could not be loaded. Close this window and try again.";return;}
-                    state=r.StegoState;loaded=true;seenRevision=state.Revision;
+                    state=r.StegoState;loaded=true;if(!confidenceLoaded){threshold.Value=state.ConfidenceThreshold;confidenceLoaded=true;}seenRevision=state.Revision;
                     counts.Text=state.Pending+state.Checked==0 ? "No photos found." : state.Pending.ToString("N0")+" photo"+(state.Pending==1 ? "" : "s")+" to check · "+state.Checked.ToString("N0")+" checked";
                     results.ItemsSource=state.Results;pageLabel.Text="Page "+page;details.IsEnabled=export.IsEnabled=false;update();
                 });}catch{query=false;feedback.Text="The database is busy. Try again shortly.";}
             };
+            threshold.ValueChanged+=(s,e)=>thresholdLabel.Text="Automatic classification confidence: "+((int)threshold.Value)+"%";
+            selectedMode.Checked+=(s,e)=>update();all.Checked+=(s,e)=>update();
+            apply.Click+=(s,e)=>Guard(()=>{if(!apply.IsEnabled)return;apply.IsEnabled=false;Work(database.RequestStegoConfidence((int)threshold.Value),"Update automatic confidence",r=>{outcome=r.Value;loaded=false;refresh();});});
             start.Click+=(s,e)=>Guard(()=>{
-                if(!start.IsEnabled)return;outcome=null;stegoTask=scanStart==null ? database.RequestStegoScan() : scanStart();lastTask=stegoTask;Message("Hidden data scan started.");
+                if(!start.IsEnabled)return;outcome=null;var options=new StegoScanOptions {Scope=selectedMode.IsChecked==true ? StegoScanScope.Selected : StegoScanScope.AllUnchecked,SelectedGroupIds=selectedPhotos,MinimumConfidencePercent=(int)threshold.Value};stegoTask=scanStart==null ? database.RequestStegoScan(options) : scanStart(options);lastTask=stegoTask;Message("Hidden data scan started.");
                 string id=stegoTask;Queue(id,r=>{if(stegoTask==id)stegoTask=null;Message(r.Success ? r.Value : "Scan stopped before all photos were checked.");if(!closed && r.Success && Ready && ReferenceEquals(engine,database)){Combo("ViewBox").SelectedIndex=Array.IndexOf(BucketKeys,StegoFindings.Bucket);dialog.Close();return;}if(!closed){lastTask=null;outcome=feedback.Text=r.Success ? r.Value : database.GetOperationProgress(id).State=="cancelled" ? "Scan stopped. Finished checks are saved." : "The scan could not finish. Try again to check the remaining photos.";loaded=false;refresh();}});update();
             });
             previous.Click+=(s,e)=>{if(page>1){page--;refresh();}};next.Click+=(s,e)=>{if(state!=null && state.More){page++;refresh();}};

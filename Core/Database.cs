@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace MediaReviewer {
     public static partial class Catalog {
         public const int ApplicationId=0x4D435257;
-        public const int SchemaVersion=15;
+        public const int SchemaVersion=16;
         internal static string Now() { return DateTime.UtcNow.ToString("o",CultureInfo.InvariantCulture); }
         public static void Initialize(SqliteConnection db,bool create) {
             Initialize(db,create,CancellationToken.None,null);
@@ -20,7 +20,7 @@ namespace MediaReviewer {
                 if(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"))!=0) throw new InvalidDataException("Create requires an empty new database; an existing database is never overwritten.");
                 db.Script("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;");
                 try {
-                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+Migrations.Schema14+Migrations.Schema15+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
+                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+Migrations.Schema14+Migrations.Schema15+Migrations.Schema16+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
                     db.Execute("INSERT INTO app_info(key,value) VALUES('workspace_id',?)",Guid.NewGuid().ToString());
                     db.Execute("INSERT INTO app_info(key,value) VALUES('revision','0')"); db.Execute("COMMIT");
                 } catch { Rollback(db); throw; }
@@ -127,7 +127,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             }
             return group;
         }
-        internal static void Rollback(SqliteConnection db) { try { db.Execute("ROLLBACK"); } catch {} }
+        internal static void Rollback(SqliteConnection db) { try { db.ConfirmRollback(); } catch(Exception error){throw new UncertainDatabaseStateException(error);} }
         internal static long[] Totals(SqliteConnection db) {
             var totals=new long[4]; string[] names={"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"};
             foreach(object[] row in db.Query("SELECT status,total FROM bucket_totals",new object[0],4)) { int i=Array.IndexOf(names,(string)row[0]); if(i>=0) totals[i]=(long)row[1]; } return totals;
@@ -341,7 +341,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 for(int i=0;i<2;i++) { var reader=new Thread(ReaderMain) { IsBackground=true,Name="MediaReviewer reader "+i }; readers.Add(reader); reader.Start(); }
                 StartOperations(db);ready=true; DateTime checkpoint=DateTime.UtcNow;
                 DateTime recoveryAt=checkpoint;
-                while(!stop.IsCancellationRequested || controls.Count+writes.Count>0) {
+                while(!faulted && (!stop.IsCancellationRequested || controls.Count+writes.Count>0)) {
                     if(recoverIdentity && !stop.IsCancellationRequested && DateTime.UtcNow>=recoveryAt){
                         recoverIdentity=Catalog.CleanAbandonedVerificationBatch(db);
                         recoveryAt=DateTime.UtcNow.AddMilliseconds(125);
@@ -357,9 +357,13 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                         Update(s=>{ if(s.Revision!=revision){s.Revision=revision;s.LastCommitUtc=DateTime.UtcNow;s.LastProgressUtc=DateTime.UtcNow;s.PublishedGroups=Catalog.Totals(db).Sum();} });
                         if(work.Completion!=null) work.Completion.TrySetResult(value); if(work.Done!=null) work.Done(value);
                     } catch(Exception error) {
-                        if(work.Completion!=null) work.Completion.TrySetException(error); if(work.Failed!=null) work.Failed(error);
+                        bool recoverable=false;
                         var sqlite=error as DatabaseException;
-                        if(sqlite!=null && !sqlite.IsTransient) throw;
+                        bool expected=sqlite!=null ? sqlite.IsTransient : !(error is UncertainDatabaseStateException) && (error is IOException || error is ArgumentException || error is OperationCanceledException || error is ProtectedDetailsException || error.GetType()==typeof(InvalidOperationException));
+                        if(expected){try{db.ConfirmRollback();recoverable=true;}catch(Exception rollbackError){FailureDiagnostics.Record("Writer rollback",rollbackError);}}
+                        if(!recoverable){faulted=true;ready=false;}
+                        if(work.Completion!=null) work.Completion.TrySetException(error); if(work.Failed!=null) work.Failed(error);
+                        if(!recoverable)throw;
                     }
                     try { FileInfo wal=new FileInfo(Paths.Io(path+"-wal")); if(wal.Exists) Update(s=>s.WalBytes=wal.Length); } catch(IOException) {}
                 }
@@ -376,6 +380,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             catch(OperationCanceledException) {} catch(Exception error) { Update(s=>s.Error="Reader failed: "+error.Message); }
         }
         partial void StopScanner(); partial void JoinScanner();
+        internal void FailStop(Exception error){faulted=true;ready=false;FailureDiagnostics.Record("UI database fail-stop",error);Update(s=>{s.Stage="Database stopped";s.Error="Review stopped safely. Reopen the database before continuing: "+FailureDiagnostics.Brief(error);});stop.Cancel();CloseAsync();}
         public void Dispose() {
             if(closed) return; closing=true;closeStage="Stopping scan workers and preserving resumable checkpoints";results.Close();StopScanner(); JoinScanner();
             closeStage="Stopping background tasks";StopPlayback();StopStegoAnalysis();StopOperations();StopGemma();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();

@@ -168,6 +168,12 @@ CREATE INDEX ai_draft_rank ON ai_draft_scores(model,score DESC,content_id);";
         internal const string Schema14=@"CREATE TABLE stego_runs(id TEXT PRIMARY KEY,group_id INTEGER NOT NULL REFERENCES review_groups(id),content_id INTEGER NOT NULL REFERENCES contents(id),original_sha256 TEXT NOT NULL,package_sha256 TEXT NOT NULL,created_at TEXT NOT NULL,status TEXT NOT NULL,suspicion_index INTEGER,result_json TEXT NOT NULL);
 CREATE INDEX stego_group_history ON stego_runs(group_id,created_at DESC,id);
 ";
+        internal const string Schema16=@"ALTER TABLE stego_flags ADD COLUMN qualifies INTEGER NOT NULL DEFAULT 0 CHECK(qualifies IN(0,1));
+UPDATE source_connection_files SET state='candidate_unverified',error='Legacy candidate location needs review; sampled equality is not full-file proof.' WHERE state='candidate' AND connection_id IN(SELECT connection_id FROM root_source_heads);
+DELETE FROM source_observations WHERE occurrence_id IN(SELECT o.id FROM occurrences o JOIN contents c ON c.id=o.content_id JOIN root_source_heads h ON h.root_id=o.root_id WHERE c.algorithm='sampled-sha256-v1');
+UPDATE source_reconnect_items SET state='review',error='Review this legacy reconnect in Sources / reconnect; candidate or incomplete results were previously accepted.' WHERE state='connected' AND (candidate_count>0 OR missing_count>0 OR failed_count>0);
+UPDATE source_reconnect_batches SET state='complete_errors' WHERE state='complete' AND id IN(SELECT batch_id FROM source_reconnect_items WHERE state='review');
+INSERT OR REPLACE INTO settings(key,value) VALUES('identity.full_scan_policy','1');";
         internal const string Schema15=@"CREATE TABLE stego_flags(group_id INTEGER PRIMARY KEY REFERENCES review_groups(id),content_id INTEGER NOT NULL REFERENCES contents(id),run_id TEXT NOT NULL REFERENCES stego_runs(id) ON DELETE CASCADE,indicator_key TEXT NOT NULL,review_operation TEXT NOT NULL DEFAULT '');";
         internal static void Apply(SqliteConnection writer,int targetVersion,CancellationToken token,Action<OperationProgress> progress) {
             int version=Convert.ToInt32(writer.Scalar("PRAGMA user_version"));
@@ -185,7 +191,7 @@ CREATE INDEX stego_group_history ON stego_runs(group_id,created_at DESC,id);
                 try {if(rebuilding)writer.Execute("PRAGMA foreign_keys=OFF");
                     if(progress!=null)progress(new OperationProgress {Kind="Upgrade",State="running",Stage="Upgrading database schema "+version+" to "+(version+1),Unit="SQLite steps",LastProgressUtc=DateTime.UtcNow});
                     Sql.sqlite3_progress_handler(writer.Handle,2000,check,IntPtr.Zero);
-                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : version==10 ? Schema11 : version==11 ? Schema12 : version==12 ? Schema13 : version==13 ? Schema14 : Schema15);token.ThrowIfCancellationRequested();
+                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : version==10 ? Schema11 : version==11 ? Schema12 : version==12 ? Schema13 : version==13 ? Schema14 : version==14 ? Schema15 : Schema16);token.ThrowIfCancellationRequested();
                     if(rebuilding && writer.Query("PRAGMA foreign_key_check",new object[0],1).Count!=0)throw new InvalidDataException("Upgrade foreign-key validation failed; the original schema is retained.");
                     token.ThrowIfCancellationRequested();Sql.sqlite3_progress_handler(writer.Handle,0,null,IntPtr.Zero);
                     writer.Execute("PRAGMA user_version="+(version+1));writer.Execute("COMMIT");version++;}

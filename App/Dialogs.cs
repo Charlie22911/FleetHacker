@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -103,11 +104,10 @@ namespace MediaReviewer {
             var root=new CheckBox {Content="Include root-level media files",IsChecked=options.IncludeRootFiles,Margin=new Thickness(4)};
             var zip=new CheckBox {Content="Scan supported ZIP archives",IsChecked=options.ScanArchives,Margin=new Thickness(4)};
             var sniff=new CheckBox {Content="Detect renamed media by file header",IsChecked=options.SniffRenamed,Margin=new Thickness(4),ToolTip="Checks a small header on ordinary files with unknown extensions. It can increase reads on a network share."};
-            var full=new CheckBox {Content="Read every selected file for full SHA-256",IsChecked=options.FullHashScans,Margin=new Thickness(4)};
-            panel.Children.Add(Label("Choose which files to scan and how to verify them. Deep always includes AppData."));
-            foreach(var toggle in new[]{appData,root,zip,sniff,full})panel.Children.Add(toggle);
+            panel.Children.Add(Label("Choose which files to scan. Every selected file is read for its full SHA-256 identity. Deep always includes AppData."));
+            foreach(var toggle in new[]{appData,root,zip,sniff})panel.Children.Add(toggle);
             var actions=Bar();panel.Children.Add(actions);
-            actions.Children.Add(ActionButton("Apply",()=>{options.IncludeApplicationData=appData.IsChecked==true;options.IncludeRootFiles=root.IsChecked==true;options.ScanArchives=zip.IsChecked==true;options.SniffRenamed=sniff.IsChecked==true;options.FullHashScans=full.IsChecked==true;dialog.Close();}));
+            actions.Children.Add(ActionButton("Apply",()=>{options.IncludeApplicationData=appData.IsChecked==true;options.IncludeRootFiles=root.IsChecked==true;options.ScanArchives=zip.IsChecked==true;options.SniffRenamed=sniff.IsChecked==true;dialog.Close();}));
             actions.Children.Add(ActionButton("Cancel",dialog.Close));dialog.ShowDialog();
         }
 
@@ -122,6 +122,26 @@ namespace MediaReviewer {
             actions.Children.Add(ActionButton("Cancel",dialog.Close));content.Children.Add(new ScrollViewer {Content=list});dialog.ShowDialog();
         }
 
+        static byte[] ReadPassword(PasswordBox input,PasswordBox confirmation){
+            char[] characters=null,confirmed=null;IntPtr plain=IntPtr.Zero,other=IntPtr.Zero;
+            try {
+                using(var secure=input.SecurePassword){
+                    if(secure.Length==0 || secure.Length>16384)return null;
+                    plain=Marshal.SecureStringToGlobalAllocUnicode(secure);characters=new char[secure.Length];Marshal.Copy(plain,characters,0,characters.Length);
+                }
+                if(confirmation!=null)using(var secure=confirmation.SecurePassword){
+                    other=Marshal.SecureStringToGlobalAllocUnicode(secure);confirmed=new char[secure.Length];Marshal.Copy(other,confirmed,0,confirmed.Length);
+                    int difference=characters.Length^confirmed.Length;
+                    for(int i=0;i<Math.Min(characters.Length,confirmed.Length);i++)difference|=characters[i]^confirmed[i];
+                    if(difference!=0)return null;
+                }
+                return Encoding.UTF8.GetBytes(characters);
+            }finally{
+                if(characters!=null)Array.Clear(characters,0,characters.Length);if(confirmed!=null)Array.Clear(confirmed,0,confirmed.Length);
+                if(plain!=IntPtr.Zero)Marshal.ZeroFreeGlobalAllocUnicode(plain);if(other!=IntPtr.Zero)Marshal.ZeroFreeGlobalAllocUnicode(other);
+            }
+        }
+
         byte[] Password(string title,string prompt,bool confirm){
             var panel=new StackPanel {Margin=new Thickness(18)};var dialog=Dialog(title,panel,535,confirm ? 315 : 250);
             panel.Children.Add(Label(prompt));
@@ -130,11 +150,11 @@ namespace MediaReviewer {
             if(confirm){panel.Children.Add(Label("Confirm password"));panel.Children.Add(again);}
             var actions=Bar();panel.Children.Add(actions);byte[] value=null;
             var ok=ActionButton(confirm ? "Set password" : "Unlock",()=>{
-                if(input.Password.Length==0 || confirm && input.Password!=again.Password)return;
-                value=Encoding.UTF8.GetBytes(input.Password);dialog.DialogResult=true;
+                value=ReadPassword(input,confirm ? again : null);if(value==null)return;
+                input.Clear();again.Clear();dialog.DialogResult=true;
             });
             ok.IsDefault=true;actions.Children.Add(ok);var cancel=ActionButton("Cancel",dialog.Close);cancel.IsCancel=true;actions.Children.Add(cancel);
-            dialog.Loaded+=(s,e)=>input.Focus();try{dialog.ShowDialog();return value;}finally{input.Clear();again.Clear();}
+            dialog.Loaded+=(s,e)=>input.Focus();bool returned=false;try{if(dialog.ShowDialog()!=true){if(value!=null)Array.Clear(value,0,value.Length);value=null;}returned=true;return value;}finally{input.Clear();again.Clear();if(!returned && value!=null)Array.Clear(value,0,value.Length);}
         }
 
         void Unlock(Action complete,Action abandoned=null) {
@@ -144,7 +164,8 @@ namespace MediaReviewer {
                 password=Password(create ? "Set originals password" : "Unlock stored originals",
                     create ? "Choose a password for encrypted originals. Keep it somewhere safe." : "Enter the current originals password. Imported HTML Evidence initially uses its saved HTML password.",create);
                 if(password==null){if(abandoned!=null)abandoned();return;}
-                Work(engine.RequestVaultUnlock(password,create),"Unlock originals",r=>{
+                string request=engine.RequestVaultUnlock(password,create);password=null;
+                Work(request,"Unlock originals",r=>{
                     if(r.Success){if(complete!=null)complete();}
                     else if(abandoned!=null)abandoned();
                 },true);
@@ -303,7 +324,7 @@ namespace MediaReviewer {
         void ShowDraftReview(){
             if(!Ready)return;
             bool available=DraftModelWorker.GemmaAvailable();
-            if(available!=gemmaAvailable){gemmaAvailable=available;refresh=true;view.Advance();}
+            if(available!=gemmaAvailable){gemmaAvailable=available;refresh=true;InvalidateThumbnails();}
             var body=new StackPanel {Margin=new Thickness(18)};
             var dialog=Dialog("AI draft check",body,590,510);
             body.Children.Add(Label("Choose a model for saved images and sampled frames from videos and GIFs. Matches appear in AI suggestions for human confirmation."));
@@ -367,7 +388,7 @@ namespace MediaReviewer {
                     if(!result.Success){Message("Could not save AI settings. "+result.Error);return;}
                     if(gemma){gemmaThreshold=percent;gemmaCpuOnly=cpuOnly;if(criteriaChanged)gemmaCriteria=criteria;}else marqoThreshold=percent;
                     useGemma=gemma;
-                    if(BucketKeys[bucket]==DraftReview.Bucket)NewPage(1);else{view.Advance();refresh=true;}
+                    if(BucketKeys[bucket]==DraftReview.Bucket)NewPage(1);else{InvalidateThumbnails();refresh=true;}
                     Message(result.Value);
                     if(run && Ready)Guard(()=>StartDraftReview(gemma,cpuOnly));
                 });
@@ -497,7 +518,8 @@ namespace MediaReviewer {
                 replacement=Password("New originals password","Choose a new password. Earlier copies keep the password they were saved with.",true);
                 if(replacement==null)return;
                 if(protectedWindow!=null)protectedWindow.Close();
-                Work(engine.RequestVaultPasswordChange(current,replacement,Id()),"Change originals password");submitted=true;
+                string request=engine.RequestVaultPasswordChange(current,replacement,Id());submitted=true;
+                Work(request,"Change originals password");
             }finally{if(!submitted){Array.Clear(current,0,current.Length);if(replacement!=null)Array.Clear(replacement,0,replacement.Length);}}
         }
         void ChangeDefaultSource(string path) {

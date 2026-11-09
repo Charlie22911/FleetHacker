@@ -28,6 +28,7 @@ namespace MediaReviewer {
             if(rows.Count==0 || (long)rows[0][4]!=0)throw new InvalidOperationException("This review group was replaced; refresh the page.");
             if((string)rows[0][3]=="EVIDENCE")throw new InvalidOperationException("Evidence remains protected. Its identity cannot be changed by candidate verification.");
             if((string)rows[0][2]=="sha256")throw new InvalidOperationException("This group already has a full SHA-256 identity.");
+            RequireRecordedOriginal(db,group);
             if(protect){
                 if(db.Scalar("SELECT 1 FROM imported_fields f JOIN import_extensions e ON e.rowid=f.owner_rowid WHERE f.owner_table='import_extensions' AND e.kind='identity_aliases' AND f.column_name IN('old_key','group_key') LIMIT 1")!=null || db.Scalar("SELECT 1 FROM review_groups WHERE id=? AND length(legacy_key)>4096",group)!=null)throw new InvalidOperationException("Protected identity links contain oversized fields; ordinary verification is unavailable until the protected-record resolver supports them.");
                 var guard=db.Query(@"WITH RECURSIVE linked(key) AS (
@@ -38,10 +39,21 @@ namespace MediaReviewer {
                 if((long)guard[1]!=0)throw new InvalidOperationException("This candidate links to a protected original. Its identity is retained until the authenticated Evidence workflow can resolve it.");
             }return rows[0];
         }
+        // A sampled replacement is only a candidate. Its newer stamp must never replace
+        // the recorded original's provenance when deciding which review a full hash owns.
+        // Used for verification (including saved previews) and original analysis.
+        internal static void RequireRecordedOriginal(SqliteConnection db,long group){
+            if(db.Scalar(@"SELECT 1 FROM group_occurrences linked JOIN occurrences original ON original.id=linked.id
+ JOIN roots r ON r.id=original.root_id JOIN root_source_heads h ON h.root_id=original.root_id JOIN source_connections s ON s.id=h.connection_id
+ LEFT JOIN source_connection_files f ON f.connection_id=h.connection_id AND f.occurrence_id=original.id AND f.content_id=original.content_id AND f.path=original.path AND f.old_size=original.size AND f.old_ticks=original.modified_ticks AND f.old_identity IS original.file_identity
+ WHERE linked.group_id=? AND linked.superseded=0 AND (f.state IS NULL OR f.state NOT IN('full','candidate') OR f.modified_ticks<>original.modified_ticks OR
+ (original.file_identity IS NOT NULL AND f.file_identity IS NOT original.file_identity) OR (original.file_identity IS NULL AND s.path_key<>r.path_key)) LIMIT 1",group)!=null)
+                throw new InvalidOperationException("This legacy candidate is connected to an unverified replacement. Its full hash cannot establish the recorded original's identity or inherit its review. Scan replacements as new full identities; verify the recorded original only when its provenance is available.");
+        }
         internal static FingerprintPolicy CandidatePolicy(object[] source){
             string digest=(string)source[7],sampling=(string)source[8];
             if((string)source[2]!="sampled-sha256-v1" || (long)source[6]!=1 || digest==null || digest.Length!=64 || digest.Any(c=>!Uri.IsHexDigit(c)))throw new InvalidDataException("The saved candidate fingerprint method or version cannot be reproduced. Scan the current contents before verification.");
-            var policy=new FingerprintPolicy {ThresholdBytes=0};
+            var policy=new FingerprintPolicy {Mode="Sampled",ThresholdBytes=0};
             if(!String.Equals(sampling,"html-v4:q2:"+digest,StringComparison.OrdinalIgnoreCase)){
                 var match=Regex.Match(sampling??"",@"\Awindows=([0-9]{1,2});maxWindowBytes=([0-9]{1,7})\z",RegexOptions.CultureInvariant);
                 if(!match.Success)throw new InvalidDataException("The saved candidate fingerprint parameters cannot be reproduced. Scan the current contents before verification.");
@@ -182,7 +194,7 @@ namespace MediaReviewer {
                                 Paths.OpenedSourceWithinRoot(lease,rootPath);if(FileAccessNative.Stamp(lease).Size!=(long)source[9])throw new InvalidDataException("Source no longer matches the saved candidate size. Scan its current contents before verification: "+relative);
                                 Action<int> readProgress=n=>{done+=n;progress(done,total,"verification bytes read");};
                                 record=FileAccessNative.FingerprintOpened(path,lease,new FileRecord(),buffer,token,readProgress,0,FingerprintPolicy.Full());
-                                var candidate=FileAccessNative.FingerprintOpened(path,lease,new FileRecord(),buffer,token,readProgress,0,candidatePolicy);
+                                var candidate=FileAccessNative.FingerprintLegacyOpened(path,lease,buffer,token,readProgress,candidatePolicy);
                                 if(candidate==null || candidate.Algorithm!="sampled-sha256-v1" || !String.Equals(candidate.Hash,"q2:"+(string)source[7],StringComparison.OrdinalIgnoreCase))throw new InvalidDataException("Source no longer matches the saved candidate fingerprint. Scan its current contents before verification: "+relative);
                             }
                             if(record==null || record.Size!=(long)row[3] || (row[5]==null ? record.ModifiedTicks/10000!=(long)row[4]/10000 : record.ModifiedTicks!=(long)row[4] || record.FileIdentity!=(string)row[5]))throw new InvalidDataException("Source no longer matches the recorded location. Scan its current contents before verification: "+relative);break;
