@@ -1,0 +1,112 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Security.Cryptography;
+using System.Threading;
+using System.Web.Script.Serialization;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
+namespace MediaReviewer {
+    static class StegoQueueSmoke {
+        static string phase="setup";
+        static void Check(bool value,string message){if(!value)throw new Exception(message);}
+        static void Wait(Func<bool> condition,int seconds=180){var timer=Stopwatch.StartNew();while(!condition()){if(timer.Elapsed.TotalSeconds>seconds)throw new TimeoutException("Scan workflow check timed out: "+phase);var frame=new DispatcherFrame();Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>frame.Continue=false));Dispatcher.PushFrame(frame);Thread.Sleep(10);}}
+        static UiResult Result(ReviewerEngine engine,string id){UiResult result=null;Wait(()=>{UiResult next;while(engine.TryTakeResult(out next))if(next.RequestId==id)result=next;return result!=null;},300);return result;}
+        static void Image(string path,int number){var pixels=new byte[32*32*3];for(int i=0;i<pixels.Length;i++)pixels[i]=(byte)(i%251);pixels[0]=(byte)number;pixels[1]=(byte)(number>>8);var bitmap=BitmapSource.Create(32,32,96,96,PixelFormats.Rgb24,null,pixels,96);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using(var file=File.Create(path))encoder.Save(file);}
+        static string Json(string sha,string source,string state="partial",bool failed=false,int score=0){return new JavaScriptSerializer().Serialize(new {schemaVersion=1,source=source,sha256=sha,status=state,suspicionIndex=score,engines=new[]{new{id="aletheia",state=failed ? "failed" : "partial"},new{id="zsteg",state="completed"},new{id="binwalk",state="completed"}},findings=score>=80 ? new object[]{new {engine="binwalk",method="zip",kind="validated_payload",strength="strong",payloadSha256=new string('d',64),explanation="Embedded ZIP archive validated"}} : new object[0]});}
+        sealed class Session:IStegoSession {
+            public string Work{get;private set;}public string Nonce{get;private set;}readonly Action step;readonly int score;
+            internal Session(Action step,int score=0){this.score=score;this.step=step;Nonce=Guid.NewGuid().ToString("N");Work=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Temp","FHStego-"+Nonce);Directory.CreateDirectory(Work);File.WriteAllText(Path.Combine(Work,".fh-stego-owner"),Nonce);}
+            public string Analyze(string path,string sha,CancellationToken token){step();token.ThrowIfCancellationRequested();using(var input=File.OpenRead(path))using(var hash=SHA256.Create())Check(BitConverter.ToString(hash.ComputeHash(input)).Replace("-","").ToLowerInvariant()==sha,"The batch must use original-byte snapshots");return Json(sha,path,"partial",false,score);}
+            public void Dispose(){Check(File.ReadAllText(Path.Combine(Work,".fh-stego-owner"))==Nonce,"Private work ownership changed");File.Delete(Path.Combine(Work,".fh-stego-owner"));Directory.Delete(Work);}
+        }
+        internal static int Run(string directory){
+            Check(typeof(ReviewerEngine).GetMethod("RequestStegoScan",Type.EmptyTypes)!=null,"Hidden data scanning must start without a selection and find all unchecked photos");
+            Directory.CreateDirectory(directory);Finding(directory);string root=Directory.CreateDirectory(Path.Combine(directory,"photos")).FullName;
+            for(int i=0;i<210;i++)Image(Path.Combine(root,i.ToString("D3")+".png"),i);
+            string path=Path.Combine(directory,"queue.sqlite"),package=StegoCompanion.EmbeddedPin();
+            using(var engine=ReviewerEngine.Open(path,true)){
+                Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=2});Wait(()=>engine.Status.ScanId==scan&&!engine.Status.RunningScan);
+                engine.WaitWrite(db=>{
+                    var rows=db.Query("SELECT g.id,g.content_id,c.digest FROM review_groups g JOIN contents c ON c.id=g.content_id ORDER BY g.id",new object[0],210);Check(rows.Count==210,"All fixtures must be discovered");
+                    for(int i=0;i<4;i++)Catalog.SaveStego(db,(long)rows[i][0],(long)rows[i][1],(string)rows[i][2],i==3 ? new string('a',64) : package,Json((string)rows[i][2],"fixture",i==0 ? "completed" : "partial",i==2),"fixture");
+                    db.Execute("UPDATE review_groups SET status='EVIDENCE' WHERE id=?",rows[4][0]);db.Execute("UPDATE occurrences SET extension='mp4' WHERE content_id=?",rows[5][1]);db.Execute("UPDATE occurrences SET superseded=1 WHERE content_id=?",rows[6][1]);db.Execute("UPDATE review_groups SET retired=1 WHERE id=?",rows[7][0]);
+                    Check(StegoScan.Pending(db,package,Int64.MaxValue)==204,"Pending includes more than200 photos, failed checks and changed packages, excluding completed checks, Evidence, video and old locations");return null;
+                });
+                string request="";int calls=0,factories=0;
+                Func<string,string,CancellationToken,IStegoSession> factory=(d,p,t)=>{factories++;return new Session(()=>{calls++;if(calls==10)engine.CancelOperation(request);});};
+                request=engine.RequestStegoScan(factory);var cancelled=Result(engine,request);Check(!cancelled.Success && engine.GetOperationProgress(request).State=="cancelled","Stopping must end the database-wide scan");
+                using(var db=new SqliteConnection(path,true))Check(StegoScan.Pending(db,package,Int64.MaxValue)==195,"Stopping must preserve nine finished checks and leave unfinished photos queued");
+                calls=0;request=engine.RequestStegoScan((d,p,t)=>{factories++;return new Session(()=>calls++);});var finished=Result(engine,request);Check(finished.Success,finished.Error);Check(calls==195,"Resume must check every remaining photo without repeating checkpoints");
+                using(var db=new SqliteConnection(path,true)){
+                    Check(StegoScan.Pending(db,package,Int64.MaxValue)==0,"No pending photos should remain");Check(StegoScan.Pending(db,new string('b',64),Int64.MaxValue)==206,"A changed scan package must invalidate old checkpoints");
+                    var state=StegoScan.State(db,package,2);Check(state.Checked==206 && state.Results.Count==50 && state.More,"Results must be paged and count checked photos");Check(Convert.ToInt64(db.Scalar("SELECT count(*) FROM review_groups WHERE status='EVIDENCE'"))==1,"Scanning must retain Evidence decisions");
+                }
+                request=engine.RequestStegoScan((d,p,t)=>{throw new Exception("Already checked photos must not unpack the package");});Check(Result(engine,request).Success,"Rerunning a finished scan should be a no-op");Check(factories==2,"One package session per nonempty run is sufficient");
+            }
+            Ui(directory);
+            Console.WriteLine("Database-wide scan over200 photos, checkpoints, retry, stop/resume, package invalidation, exclusions, paged results and no-selection UI passed.");return 0;
+        }
+        static void Finding(string directory){
+            string root=Directory.CreateDirectory(Path.Combine(directory,"finding")).FullName;Image(Path.Combine(root,"photo.png"),1);string path=Path.Combine(directory,"finding.sqlite");
+            using(var engine=ReviewerEngine.Open(path,true)){
+                Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1});Wait(()=>engine.Status.ScanId==scan&&!engine.Status.RunningScan);
+                long group=0;engine.WaitWrite(db=>{var row=db.Query("SELECT g.id,g.content_id,c.digest FROM review_groups g JOIN contents c ON c.id=g.content_id",new object[0],1)[0];group=(long)row[0];db.Execute("UPDATE review_groups SET notes='Existing reviewer note',reviewer='Reviewer' WHERE id=?",group);Catalog.SaveStego(db,group,(long)row[1],(string)row[2],StegoCompanion.EmbeddedPin(),Json((string)row[2],"fixture","partial",true,80),"fixture");return null;});
+                using(var db=new SqliteConnection(path,true))Check(StegoScan.State(db,StegoCompanion.EmbeddedPin(),1).Results.Single().Outcome.Contains("Hidden data found"),"A failed engine must not hide an embedded file detected by another engine");
+                var bucket=Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="STEGANOGRAPHY"}));
+                Check(bucket.Success && bucket.Page.Total==1 && bucket.Page.Rows.Single().Notes.Contains("Confidence:") && bucket.Page.Rows.Single().Notes.Contains("ZIP") && bucket.Page.Rows.Single().Notes.Contains("Existing reviewer note"),"Suspect photos must appear in the Steganography bucket with run details and existing notes preserved: "+bucket.Error);
+                var result=Result(engine,engine.RequestStegoHistory(group));Check(result.Success && result.Value.Contains("embedded file") && result.Value.Contains("could not finish"),"Photo details must show both positive findings and incomplete checks");
+                engine.WaitWrite(db=>{var r=db.Query("SELECT content_id FROM review_groups WHERE id=?",new object[]{group},1)[0];string sha=(string)db.Scalar("SELECT digest FROM contents WHERE id=?",r[0]);Catalog.SaveStego(db,group,(long)r[0],sha,StegoCompanion.EmbeddedPin(),Json(sha,"fixture","partial",true,0),"fixture");Catalog.SaveStego(db,group,(long)r[0],sha,StegoCompanion.EmbeddedPin(),Json(sha,"fixture","partial",true,80),"fixture");string notes=(string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group);Check(notes.IndexOf("[Steganography scan]",StringComparison.Ordinal)==notes.LastIndexOf("[Steganography scan]",StringComparison.Ordinal),"A failed retry between positive runs must not duplicate the managed note");return null;});
+                bucket=Result(engine,engine.RequestPage(new PageRequest {Generation=1,Bucket="STEGANOGRAPHY"}));var before=bucket.Page.Rows.Single();var action=new ReviewRequest {GroupIds=new[]{group},Status="COMPLIANT",Reviewer="Human reviewer",Notes="",OperationId=Guid.NewGuid().ToString("N")};var receipt=Result(engine,engine.RequestReview(action));Check(receipt.Success,receipt.Error);
+                var reviewed=Result(engine,engine.RequestPage(new PageRequest {Generation=2,Bucket="STEGANOGRAPHY"}));Check(reviewed.Success && reviewed.Page.Total==0,"A human review must resolve the steganography flag");
+                var inspector=Result(engine,engine.RequestInspector(group,0));Check(inspector.Success && inspector.Inspector.Notes.Contains("Confidence:") && inspector.Inspector.Notes.Contains("Existing reviewer note"),"Review decisions must retain the automatic findings and existing notes");
+                var undone=Result(engine,engine.RequestUndoReview(new[]{new ReviewUndoItem {GroupId=group,Status=before.Status,Reviewer=before.Reviewer,Notes=before.Notes,ExpectedRevision=receipt.ReviewRevisions[group],ReviewOperationId=action.OperationId}},Guid.NewGuid().ToString("N")));Check(undone.Success,undone.Error);
+                Check(Result(engine,engine.RequestPage(new PageRequest {Generation=3,Bucket="STEGANOGRAPHY"})).Page.Total==1,"Undo must restore the steganography review flag");
+                action.OperationId=Guid.NewGuid().ToString("N");Check(Result(engine,engine.RequestReview(action)).Success,"Second review should succeed");
+                engine.WaitWrite(db=>{var r=db.Query("SELECT content_id FROM review_groups WHERE id=?",new object[]{group},1)[0];string sha=(string)db.Scalar("SELECT digest FROM contents WHERE id=?",r[0]);Catalog.SaveStego(db,group,(long)r[0],sha,StegoCompanion.EmbeddedPin(),Json(sha,"fixture","partial",true,80),"fixture");string notes=(string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group);Check(notes.IndexOf("[Steganography scan]",StringComparison.Ordinal)==notes.LastIndexOf("[Steganography scan]",StringComparison.Ordinal),"A repeated run must update its managed note instead of duplicating it");Check(StegoFindings.Count(db)==0,"A retry with the same evidence must not undo a human review");
+                    string full=new string('x',17000);db.Execute("UPDATE review_groups SET notes=? WHERE id=?",full,group);Catalog.SaveStego(db,group,(long)r[0],sha,StegoCompanion.EmbeddedPin(),Json(sha,"fixture","partial",true,80),"fixture");Check((string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group)==full,"Long manual notes must not be truncated to fit scan details");return null;});
+                inspector=Result(engine,engine.RequestInspector(group,0));Check(inspector.Success && inspector.Inspector.StegoNotes.Contains("Confidence:"),"Scan details must remain visible when the manual notes field is full");
+                long stale=0;engine.WaitWrite(db=>{stale=Catalog.ReviewRevision(db,group);var r=db.Query("SELECT content_id FROM review_groups WHERE id=?",new object[]{group},1)[0];string sha=(string)db.Scalar("SELECT digest FROM contents WHERE id=?",r[0]);string changed=Json(sha,"fixture","partial",true,80).Replace(new string('d',64),new string('e',64));Catalog.SaveStego(db,group,(long)r[0],sha,StegoCompanion.EmbeddedPin(),changed,"fixture");Check(Catalog.ReviewRevision(db,group)>stale,"New evidence must invalidate pre-finding review snapshots even when notes are full");return null;});
+                var unseen=new ReviewRequest {GroupIds=new[]{group},Status="COMPLIANT",Reviewer="Reviewer",Notes="",OperationId=Guid.NewGuid().ToString("N"),ExpectedRevisions=new Dictionary<long,long>{{group,stale}}};Check(!Result(engine,engine.RequestReview(unseen)).Success,"A review from before new evidence must not acknowledge it");
+                action.OperationId=Guid.NewGuid().ToString("N");Check(Result(engine,engine.RequestReview(action)).Success,"Review with long notes should succeed");
+                engine.WaitWrite(db=>{Check((string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group)==new string('x',17000),"Classifying must not replace long manual notes with scan text");byte[] legacy=System.Text.Encoding.UTF8.GetBytes("Imported note "+new string('z',20000));using(var writer=new ImportedFields.Writer(db,"review_groups",group,"notes","utf8",CancellationToken.None)){writer.Write(legacy,0,legacy.Length);writer.Complete();}return null;});
+                action.OperationId=Guid.NewGuid().ToString("N");Check(Result(engine,engine.RequestReview(action)).Success,"Review with imported notes should succeed");
+                engine.WaitWrite(db=>{using(var stream=ImportedFields.Open(db,"review_groups",group,"notes"))using(var reader=new StreamReader(stream,System.Text.Encoding.UTF8))Check(reader.ReadToEnd()=="Imported note "+new string('z',20000),"Classifying must preserve imported note chunks");ImportedFields.Delete(db,"review_groups",group,"notes");return null;});
+                engine.WaitWrite(db=>{var r=db.Query("SELECT id,result_json FROM stego_runs WHERE group_id=? ORDER BY created_at DESC,id DESC LIMIT 1",new object[]{group},1)[0];var json=new JavaScriptSerializer();var value=json.Deserialize<Dictionary<string,object>>((string)r[1]);value.Remove("reviewNote");db.Execute("UPDATE stego_runs SET result_json=? WHERE id=?",json.Serialize(value),r[0]);db.Execute("UPDATE review_groups SET notes='Legacy reviewer note' WHERE id=?",group);var identity=db.Query("SELECT g.content_id,c.digest FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=?",new object[]{group},1)[0];Catalog.SaveStego(db,group,(long)identity[0],(string)identity[1],StegoCompanion.EmbeddedPin(),Json((string)identity[1],"fixture","partial",true,0),"fixture");return null;});
+
+            }
+            using(var db=new SqliteConnection(path,false)){db.Execute("DROP TABLE stego_flags");db.Execute("PRAGMA user_version=14");}
+            using(var engine=ReviewerEngine.Open(path,false)){Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);var restored=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="STEGANOGRAPHY"}));Check(restored.Success && restored.Page.Total==1 && restored.Page.Rows.Single().Notes.Contains("Legacy reviewer note") && restored.Page.Rows.Single().Notes.Contains("Confidence:"),"Opening an older database must integrate its saved findings without rerunning the detectors");}
+        }
+        static FrameworkElement Find(DependencyObject root,string name){var element=root as FrameworkElement;if(element!=null && element.Name==name)return element;foreach(object child in LogicalTreeHelper.GetChildren(root)){var node=child as DependencyObject;if(node!=null){var match=Find(node,name);if(match!=null)return match;}}return null;}
+        internal static int NotesRun(string directory){Directory.CreateDirectory(directory);Finding(directory);Console.WriteLine("Integrated finding notes, review, Undo and migration checks passed.");return 0;}
+        internal static int InterfaceRun(string directory){Directory.CreateDirectory(directory);Ui(directory);Console.WriteLine("Scan interface and integrated results navigation passed.");return 0;}
+        static void Ui(string directory){
+            string root=Directory.CreateDirectory(Path.Combine(directory,"ui-photos")).FullName;Image(Path.Combine(root,"photo.png"),1);string path=Path.Combine(directory,"ui.sqlite");
+            using(var engine=ReviewerEngine.Open(path,true)){Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1});Wait(()=>engine.Status.ScanId==scan&&!engine.Status.RunningScan);}
+            var application=new Application {ShutdownMode=ShutdownMode.OnExplicitShutdown};
+            using(var controller=new ReviewerWindow(Program.ReadWindow(),false)){
+                controller.Window.Width=1400;controller.Window.Height=900;controller.Window.Show();
+                Wait(()=>((Button)controller.Window.FindName("SteganographyButton")).Visibility==Visibility.Visible);
+                Check(!((Button)controller.Window.FindName("SteganographyButton")).IsEnabled && controller.CreateStegoWindow()==null,"Scanning must wait for an open database instead of displaying an unusable window");
+                controller.Open(path,false);
+                Wait(()=>((Button)controller.Window.FindName("SteganographyButton")).Visibility==Visibility.Visible && ((TextBlock)controller.Window.FindName("SelectionLabel")).Text=="0 selected" && ((Button)controller.Window.FindName("SteganographyButton")).IsEnabled);
+                var database=(ReviewerEngine)typeof(ReviewerWindow).GetField("engine",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(controller);
+                var dialog=controller.CreateStegoWindow(()=>database.RequestStegoScan((d,p,t)=>new Session(()=>{},80)));Check(dialog!=null,"The scan window must open without a selection");dialog.Show();
+                var start=(Button)Find(dialog,"StegoStartButton");Wait(()=>start.IsEnabled);Check(((TextBlock)Find(dialog,"StegoCountLabel")).Text.Contains("1 photo to check"),"An unchecked photo must be counted without selecting it");
+                Check(!((Expander)Find(dialog,"StegoTechnicalDetails")).IsExpanded,"Technical details must be closed by default");
+                dialog.UpdateLayout();var image=new RenderTargetBitmap((int)dialog.ActualWidth,(int)dialog.ActualHeight,96,96,PixelFormats.Pbgra32);image.Render(dialog);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(image));using(var file=File.Create(Path.Combine(directory,"hidden-data-scan.png")))encoder.Save(file);
+                phase="start after render";Wait(()=>start.IsEnabled,30);start.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                string started=(string)typeof(ReviewerWindow).GetField("stegoTask",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(controller);Check(!String.IsNullOrEmpty(started),"Start scan did not start: "+((TextBlock)controller.Window.FindName("MessageText")).Text+" / "+((TextBlock)Find(dialog,"StegoStatusLabel")).Text);
+                phase="results navigation";Wait(()=>{var check=database.GetOperationProgress(started);if(check!=null && check.State=="failed")throw new Exception("Scan failed: "+check.Error);return !dialog.IsVisible && ((ComboBox)controller.Window.FindName("ViewBox")).SelectedIndex==5 && ((Button)controller.Window.FindName("Queue5")).Content.ToString().Contains("(1)");});
+                controller.Window.UpdateLayout();var bucketImage=new RenderTargetBitmap((int)controller.Window.ActualWidth,(int)controller.Window.ActualHeight,96,96,PixelFormats.Pbgra32);bucketImage.Render(controller.Window);var bucketEncoder=new PngBitmapEncoder();bucketEncoder.Frames.Add(BitmapFrame.Create(bucketImage));using(var file=File.Create(Path.Combine(directory,"steganography-bucket.png")))bucketEncoder.Save(file);
+                controller.Window.Close();Wait(()=>(bool)typeof(ReviewerWindow).GetField("allowClose",System.Reflection.BindingFlags.Instance|System.Reflection.BindingFlags.NonPublic).GetValue(controller));
+            }application.Shutdown();
+        }
+    }
+}

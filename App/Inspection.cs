@@ -18,6 +18,7 @@ namespace MediaReviewer {
             var summary=Label("Loading details…");top.Children.Add(summary);
             var reviewer=Editor("",128);var notes=Editor("");notes.AcceptsReturn=true;notes.TextWrapping=TextWrapping.Wrap;
             notes.Height=112;notes.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;
+            var scanNotes=new TextBox {IsReadOnly=true,TextWrapping=TextWrapping.Wrap,AcceptsReturn=true,MaxHeight=180,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};var scanSection=new Expander {Header="Steganography findings",Content=scanNotes,Visibility=Visibility.Collapsed};top.Children.Add(scanSection);
             top.Children.Add(Label("Reviewer"));top.Children.Add(reviewer);top.Children.Add(Label("Notes"));top.Children.Add(notes);
             var tagBar=new WrapPanel {Margin=new Thickness(0,4,0,4)};
             foreach(string preset in new[]{"Personal media","Unauthorized file","Renamed extension","Game / archive asset","Needs follow-up"}){
@@ -93,7 +94,7 @@ namespace MediaReviewer {
                     detailsLoading=false;
                     if(!r.Success){feedback.Text=r.Error;updateEditors();return;}
                     bool preserveDraft=keepDraft && current!=null;
-                    current=r.Inspector;
+                    current=r.Inspector;scanNotes.Text=current.StegoNotes;scanSection.Visibility=String.IsNullOrEmpty(current.StegoNotes) ? Visibility.Collapsed : Visibility.Visible;
                     summary.Text="Group "+current.GroupId+" · Publication "+current.Sequence+" · "+current.Status+" · "+current.Size.ToString("N0")+" bytes\n"+
                         "Root: "+current.RootPath+"\n"+current.Algorithm+" v"+current.AlgorithmVersion+": "+current.Digest+"\nPreview: "+current.PreviewState;
                     if(!preserveDraft){reviewer.Text=current.Reviewer;notes.Text=current.Notes;}
@@ -205,7 +206,7 @@ namespace MediaReviewer {
             };
             for(int i=0;i<BucketKeys.Length;i++){
                 string key=BucketKeys[i];
-                if(key==DraftReview.Bucket)continue;
+                if(key==DraftReview.Bucket || key==StegoFindings.Bucket)continue;
                 reviewActions.Children.Add(ActionButton(BucketNames[i],()=>Guard(()=>classify(key))));
             }
 

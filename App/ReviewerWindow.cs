@@ -15,9 +15,9 @@ using Microsoft.Win32;
 
 namespace MediaReviewer {
     sealed partial class ReviewerWindow:IDisposable {
-        static readonly string[] BucketNames={"To be reviewed","Compliant","Non-compliant","Evidence","AI suggestions"};
-        static readonly string[] BucketIcons={"📥  ","🌿  ","🚩  ","🔒  ","◇  "};
-        static readonly string[] BucketKeys={"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE",DraftReview.Bucket};
+        static readonly string[] BucketNames={"To be reviewed","Compliant","Non-compliant","Evidence","AI suggestions","Steganography"};
+        static readonly string[] BucketIcons={"📥  ","🌿  ","🚩  ","🔒  ","◇  ","🔎  "};
+        static readonly string[] BucketKeys={"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE",DraftReview.Bucket,StegoFindings.Bucket};
         readonly ObservableCollection<CardItem> cards=new ObservableCollection<CardItem>();
         readonly Dictionary<string,Action<UiResult>> pending=new Dictionary<string,Action<UiResult>>();
         readonly HashSet<Window> databaseWindows=new HashSet<Window>();
@@ -69,6 +69,7 @@ namespace MediaReviewer {
 
         internal ReviewerWindow(Window window,bool persistWorkspace=true) {
             Window=window;
+            SetUpGalleryAnimations();
             var list=Get<ItemsControl>("CardList");list.ItemsSource=cards;
             list.AddHandler(ButtonBase.ClickEvent,new RoutedEventHandler(CardClick));
             selection=new GallerySelection(Get<ScrollViewer>("GalleryScroll"),list,cards);
@@ -287,7 +288,7 @@ namespace MediaReviewer {
             Text("PageLabel","Page "+page+" of "+pageCount+" · "+result.Total.ToString("N0")+" matching items");
             marqoThreshold=result.MarqoThreshold;gemmaThreshold=result.GemmaThreshold;useGemma=result.UseGemma;gemmaCpuOnly=result.GemmaCpuOnly;gemmaCriteria=result.GemmaCriteria;gemmaSettingsLoaded=true;
             Button("Queue4").ToolTip="Suggestions from "+(useGemma ? "Gemma 4 E2B" : "Marqo")+", highest score first by default.";
-            for(int i=0;i<BucketNames.Length;i++)Button("Queue"+i).Content=((ComboBoxItem)Combo("ViewBox").Items[i]).Content=BucketIcons[i]+BucketNames[i]+" ("+(i==4 ? result.AiTotal : result.Totals[i]).ToString("N0")+")";
+            for(int i=0;i<BucketNames.Length;i++)Button("Queue"+i).Content=((ComboBoxItem)Combo("ViewBox").Items[i]).Content=BucketIcons[i]+BucketNames[i]+" ("+(i==4 ? result.AiTotal : i==5 ? result.StegoTotal : result.Totals[i]).ToString("N0")+")";
             var active=display==ReviewView.Quick ? QuickCard() : null;
             MediaRow activeRow=active==null ? null : active.Record;
             int previousPosition=active==null ? quickIndex : QuickPosition;
@@ -321,10 +322,11 @@ namespace MediaReviewer {
             bool filtered=!String.IsNullOrWhiteSpace(pageSearch) || !String.IsNullOrWhiteSpace(pageFolder) || !String.IsNullOrEmpty(Tag("TypeBox")) || !String.IsNullOrEmpty(Tag("SmartFilterBox"));
             Text("EmptyTitle",bucket==3 && filtered ? "🔒 Evidence details require unlock" : "🎉 All clear in this view!");
             Text("EmptyText",bucket==3 && filtered ? "Clear search and filters to browse Evidence items. Unlock a saved original to view its authenticated capture details." : "Nothing matches right now — try scanning a folder, switching spaces on the left, or clearing your filters.");
+            if(bucket==5 && cards.Count==0){Text("EmptyTitle","No steganography findings to review");Text("EmptyText","Run Hidden data scan to check photos for hidden data. Suspect photos appear here with scan details in their notes.");}
             if(bucket==4 && cards.Count==0){Text("EmptyTitle","No matching AI suggestions");Text("EmptyText","Run an AI draft check on your database, adjust the threshold, or clear the active filters.");}
         }
 
-        void ClearCards(){CancelQuickGesture();ResetQuickPreview();ResetPanePreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
+        void ClearCards(){galleryAnimations.Clear();CancelQuickGesture();ResetQuickPreview();ResetPanePreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
         void Remove(CardItem card){
             int index=cards.IndexOf(card);
             if(index<0)return;
@@ -380,6 +382,7 @@ namespace MediaReviewer {
             }).ToArray();
             var request=new ReviewRequest {Status=destination,OperationId=Id(),Reviewer=reviewer??Box("ReviewerBox").Text,Notes=notes??Box("NotesBox").Text,
                 GroupIds=chosen.Select(c=>c.Record.GroupId).ToArray(),ExpectedRevisions=chosen.ToDictionary(c=>c.Record.GroupId,c=>c.Record.ReviewRevision)};
+            foreach(var snapshot in undoSnapshots)snapshot.ReviewOperationId=request.OperationId;
             bool fromEvidence=chosen.Any(c=>c.Record.Status=="EVIDENCE");
             if(destination=="EVIDENCE" && fromEvidence)throw new InvalidOperationException("The selected item is already in Evidence.");
             if(fromEvidence && destination!="EVIDENCE" && MessageBox.Show(Window,"Move the selected items out of Evidence?","Move Evidence",MessageBoxButton.YesNo,MessageBoxImage.Warning)!=MessageBoxResult.Yes)return;
@@ -550,6 +553,7 @@ namespace MediaReviewer {
             CloseDatabaseWindows();
             Get<Border>("ShutdownPanel").Visibility=Visibility.Visible;
             loader.CloseAsync();
+            galleryAnimationTimer.Stop();galleryAnimations.CloseAsync();
             StopStegoPackage();
             ResetPanePreview();paneLoader.CloseAsync();
             if(switchingCatalog){waitingOnClosePreference=true;Text("ShutdownStage","Waiting for the pending preference save…");}
@@ -582,6 +586,7 @@ namespace MediaReviewer {
             if(engine!=null && !engine.Closed){if(!String.IsNullOrEmpty(engine.CloseStage))Text("ShutdownStage",engine.CloseStage);return;}
             if(!loader.Closed){Text("ShutdownStage","Database closed. Stopping preview workers…");return;}
             if(!paneLoader.Closed)return;
+            if(!galleryAnimations.Closed)return;
             if(stegoProbe!=null && !stegoProbe.IsCompleted)return;
             if(engine!=null){
                 if(!databaseClosedAt.HasValue){databaseClosedAt=DateTime.UtcNow;Text("ShutdownStage","Database closed. Committed work is saved.");Get<ProgressBar>("ShutdownProgress").IsIndeterminate=false;Get<ProgressBar>("ShutdownProgress").Value=100;return;}
@@ -590,6 +595,6 @@ namespace MediaReviewer {
             timer.Stop();allowClose=true;Window.Close();
         }
 
-        public void Dispose(){timer.Stop();selection.Dispose();if(!loader.Closed)loader.Dispose();if(!paneLoader.Closed)paneLoader.Dispose();DisposeStegoPackage();if(engine!=null && !engine.Closed)engine.Dispose();}
+        public void Dispose(){timer.Stop();galleryAnimationTimer.Stop();galleryAnimations.Dispose();selection.Dispose();if(!loader.Closed)loader.Dispose();if(!paneLoader.Closed)paneLoader.Dispose();DisposeStegoPackage();if(engine!=null && !engine.Closed)engine.Dispose();}
     }
 }

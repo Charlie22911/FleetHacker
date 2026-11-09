@@ -168,6 +168,7 @@ CREATE INDEX ai_draft_rank ON ai_draft_scores(model,score DESC,content_id);";
         internal const string Schema14=@"CREATE TABLE stego_runs(id TEXT PRIMARY KEY,group_id INTEGER NOT NULL REFERENCES review_groups(id),content_id INTEGER NOT NULL REFERENCES contents(id),original_sha256 TEXT NOT NULL,package_sha256 TEXT NOT NULL,created_at TEXT NOT NULL,status TEXT NOT NULL,suspicion_index INTEGER,result_json TEXT NOT NULL);
 CREATE INDEX stego_group_history ON stego_runs(group_id,created_at DESC,id);
 ";
+        internal const string Schema15=@"CREATE TABLE stego_flags(group_id INTEGER PRIMARY KEY REFERENCES review_groups(id),content_id INTEGER NOT NULL REFERENCES contents(id),run_id TEXT NOT NULL REFERENCES stego_runs(id) ON DELETE CASCADE,indicator_key TEXT NOT NULL,review_operation TEXT NOT NULL DEFAULT '');";
         internal static void Apply(SqliteConnection writer,int targetVersion,CancellationToken token,Action<OperationProgress> progress) {
             int version=Convert.ToInt32(writer.Scalar("PRAGMA user_version"));
             if(version==targetVersion)return;
@@ -184,7 +185,7 @@ CREATE INDEX stego_group_history ON stego_runs(group_id,created_at DESC,id);
                 try {if(rebuilding)writer.Execute("PRAGMA foreign_keys=OFF");
                     if(progress!=null)progress(new OperationProgress {Kind="Upgrade",State="running",Stage="Upgrading database schema "+version+" to "+(version+1),Unit="SQLite steps",LastProgressUtc=DateTime.UtcNow});
                     Sql.sqlite3_progress_handler(writer.Handle,2000,check,IntPtr.Zero);
-                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : version==10 ? Schema11 : version==11 ? Schema12 : version==12 ? Schema13 : Schema14);token.ThrowIfCancellationRequested();
+                    writer.Execute("BEGIN IMMEDIATE");writer.Script(version==1 ? Schema2 : version==2 ? Schema3 : version==3 ? Schema4 : version==4 ? Schema5 : version==5 ? Schema6 : version==6 ? Schema7 : version==7 ? Schema8 : version==8 ? Schema9 : version==9 ? Schema10 : version==10 ? Schema11 : version==11 ? Schema12 : version==12 ? Schema13 : version==13 ? Schema14 : Schema15);token.ThrowIfCancellationRequested();
                     if(rebuilding && writer.Query("PRAGMA foreign_key_check",new object[0],1).Count!=0)throw new InvalidDataException("Upgrade foreign-key validation failed; the original schema is retained.");
                     token.ThrowIfCancellationRequested();Sql.sqlite3_progress_handler(writer.Handle,0,null,IntPtr.Zero);
                     writer.Execute("PRAGMA user_version="+(version+1));writer.Execute("COMMIT");version++;}

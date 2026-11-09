@@ -38,12 +38,12 @@ namespace MediaReviewer {
     }
     internal sealed class DecoderHost:IDisposable {
         const int Magic=0x4d435244;readonly string directory;readonly int budget,memoryMiB;readonly object gate=new object();
-        Process process;DecoderJob job;BinaryReader input;BinaryWriter output;Task<string> stderr;bool greeting,started,disposed,retiring;int requests;
+        Process process;DecoderJob job;BinaryReader input;BinaryWriter output;Task<string> stderr;bool greeting,started,disposed,retiring,continuous;int requests;string workerScratch;
         internal DecoderHost(string runtimeDirectory,int budgetMilliseconds=30000):this(runtimeDirectory,budgetMilliseconds,384){}
         internal DecoderHost(string runtimeDirectory,int budgetMilliseconds,int memoryLimitMiB){directory=runtimeDirectory;budget=budgetMilliseconds;memoryMiB=memoryLimitMiB;}
         void Start(){
             if(retiring)Retire();
-            if(process!=null && !process.HasExited && requests<100)return;Retire();
+            if(process!=null && !process.HasExited && (continuous || requests<100))return;Retire();
             string executable;using(var current=Process.GetCurrentProcess())executable=current.MainModule.FileName;
             job=new DecoderJob(memoryMiB);process=new Process {StartInfo=new ProcessStartInfo(executable,"--preview-worker") {UseShellExecute=false,CreateNoWindow=true,WorkingDirectory=Path.GetDirectoryName(executable),RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true}};
             try{process.Start();started=true;job.Assign(process);input=new BinaryReader(process.StandardOutput.BaseStream,Encoding.UTF8);output=new BinaryWriter(process.StandardInput.BaseStream,Encoding.UTF8);var errors=process.StandardError;stderr=Task.Run(()=>{var message=new StringBuilder();char[] block=new char[1024];int count;while((count=errors.Read(block,0,block.Length))>0){if(message.Length<8192)message.Append(block,0,Math.Min(count,8192-message.Length));}return message.ToString();});greeting=false;requests=0;output.Write(0x4d435253);output.Flush();}
@@ -64,9 +64,21 @@ namespace MediaReviewer {
                 return frames;
             },token);
         }
+        internal GalleryDecodedFrame CreateGalleryFrame(string path,long size,long ticks,string identity,CancellationToken token,string root,int index){
+            if(index<-1 || index>=20)throw new ArgumentOutOfRangeException("index");
+            continuous=true;
+            int limit=index<0 ? 512*1024 : 32768;
+            var write=PathRequest(3,path,size,ticks,identity,256,limit,root);
+            return Request(writer=>{write(writer);writer.Write(index);},reader=>{
+                int delay=reader.ReadInt32();
+                if(delay==-1)return null;
+                if(delay<10 || delay>655350)throw new DecoderProtocolException("Invalid gallery frame timing");
+                return new GalleryDecodedFrame {Preview=ReadImage(reader,256,limit),DelayMilliseconds=delay};
+            },token);
+        }
         static Action<BinaryWriter> PathRequest(int kind,string path,long size,long ticks,string identity,int side,int byteLimit,string root){
             byte[] name=Encoding.UTF8.GetBytes(path),stamp=Encoding.UTF8.GetBytes(identity??""),scope=Encoding.UTF8.GetBytes(root??"");
-            if(name.Length>131072 || stamp.Length>256 || scope.Length>131072)throw new InvalidDataException("Decoder request exceeds its path/metadata bounds");
+            if(name.Length>131072 || stamp.Length>1024 || scope.Length>131072)throw new InvalidDataException("Decoder request exceeds its path/metadata bounds");
             return writer=>{
                 writer.Write(kind);writer.Write(name.Length);writer.Write(name);writer.Write(size);writer.Write(ticks);
                 writer.Write(stamp.Length);writer.Write(stamp);writer.Write(side);writer.Write(byteLimit);writer.Write(scope.Length);writer.Write(scope);
@@ -86,15 +98,18 @@ namespace MediaReviewer {
             while(!Monitor.TryEnter(gate,50))token.ThrowIfCancellationRequested();
             try{
                 token.ThrowIfCancellationRequested();if(disposed)throw new ObjectDisposedException("Decoder host");Start();
-                Task<T> read=Task.Run(()=>{
-                    if(!greeting){if(input.ReadInt32()!=Magic || input.ReadInt32()!=6)throw new DecoderProtocolException("Private decoder protocol/version mismatch");greeting=true;}
+                using(var completed=new ManualResetEvent(false)){
+                Task<T> read=Task.Run(()=>{try{
+                    if(!greeting){if(input.ReadInt32()!=Magic || input.ReadInt32()!=8)throw new DecoderProtocolException("Private decoder protocol/version mismatch");int length=input.ReadInt32();if(length<1 || length>131072)throw new DecoderProtocolException("Invalid private decoder scratch directory");byte[] scratch=input.ReadBytes(length);if(scratch.Length!=length)throw new EndOfStreamException();workerScratch=Encoding.UTF8.GetString(scratch);greeting=true;}
                     write(output);output.Flush();
                     int state=input.ReadInt32();if(state!=0){if(state!=1)throw new DecoderProtocolException("Invalid decoder response status");int code=input.ReadInt32(),n=input.ReadInt32();if(code<0 || code>65535 || n<0 || n>16384)throw new DecoderProtocolException("Invalid decoder error frame");byte[] message=input.ReadBytes(n);if(message.Length!=n)throw new EndOfStreamException();string text=Encoding.UTF8.GetString(message);var nativeError=new System.ComponentModel.Win32Exception(code,text);if(FileAccessNative.Transient(nativeError))throw nativeError;throw new InvalidDataException(text);}
                     return readResponse(input);
+                    }finally{completed.Set();}
                 });
-                var clock=Stopwatch.StartNew();
-                while(!read.IsCompleted){if(token.WaitHandle.WaitOne(25) || clock.ElapsedMilliseconds>=budget){Retire();try{read.GetAwaiter().GetResult();}catch{};token.ThrowIfCancellationRequested();throw new InvalidDataException("Preview exceeded the decoder time budget; its private process tree was stopped. The fingerprint is retained.");}}
+                int signaled=WaitHandle.WaitAny(new[]{token.WaitHandle,completed},budget);
+                if(signaled!=1){Retire();try{read.GetAwaiter().GetResult();}catch{};token.ThrowIfCancellationRequested();throw new InvalidDataException("Preview exceeded the decoder time budget; its private process tree was stopped. The fingerprint is retained.");}
                 requests++;try{return read.GetAwaiter().GetResult();}catch(DecoderProtocolException){Retire();throw;}catch(EndOfStreamException){string detail=Retire(true);throw new IOException("The private decoder ended before completing its response. "+detail);}catch(IOException){Retire();throw;}
+                }
             }finally{Monitor.Exit(gate);}
         }
         string Retire(bool includeExit=false){
@@ -104,7 +119,7 @@ namespace MediaReviewer {
             if(includeExit && process!=null && started && process.WaitForExit(100))exit=process.ExitCode;
             if(job!=null){job.StopAndWait();job.Dispose();job=null;}
             // Confirm exit before replacement: blocked OS I/O must never create abandoned helpers.
-            if(process!=null){if(started){if(!process.HasExited){try{process.Kill();}catch(InvalidOperationException){}}process.WaitForExit();}if(input!=null)input.Dispose();if(output!=null)output.Dispose();if(stderr!=null){try{detail=stderr.GetAwaiter().GetResult();}catch{}};process.Dispose();process=null;input=null;output=null;stderr=null;started=false;}retiring=false;return includeExit ? exit.HasValue ? StartupDiagnostics.ProcessExit("MediaReviewer.Decoder.exe",exit.Value,detail) : "MediaReviewer.Decoder.exe closed its response stream and was stopped by its owner before a natural exit status was available. "+detail : detail;
+            if(process!=null){if(started){if(!process.HasExited){try{process.Kill();}catch(InvalidOperationException){}}process.WaitForExit();}if(input!=null)input.Dispose();if(output!=null)output.Dispose();if(stderr!=null){try{detail=stderr.GetAwaiter().GetResult();}catch{}};process.Dispose();process=null;input=null;output=null;stderr=null;started=false;}if(workerScratch!=null){MediaScratch.RecoverWorker(workerScratch);workerScratch=null;}retiring=false;return includeExit ? exit.HasValue ? StartupDiagnostics.ProcessExit("MediaReviewer.Decoder.exe",exit.Value,detail) : "MediaReviewer.Decoder.exe closed its response stream and was stopped by its owner before a natural exit status was available. "+detail : detail;
         }
         public void Dispose(){lock(gate){disposed=true;Retire();}}
     }

@@ -10,7 +10,7 @@ using System.Threading.Tasks;
 namespace MediaReviewer {
     public static partial class Catalog {
         public const int ApplicationId=0x4D435257;
-        public const int SchemaVersion=14;
+        public const int SchemaVersion=15;
         internal static string Now() { return DateTime.UtcNow.ToString("o",CultureInfo.InvariantCulture); }
         public static void Initialize(SqliteConnection db,bool create) {
             Initialize(db,create,CancellationToken.None,null);
@@ -20,7 +20,7 @@ namespace MediaReviewer {
                 if(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table'"))!=0) throw new InvalidDataException("Create requires an empty new database; an existing database is never overwritten.");
                 db.Script("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON; BEGIN IMMEDIATE;");
                 try {
-                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+Migrations.Schema14+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
+                    db.Script(Schema+Migrations.Schema2+Migrations.Schema3+Migrations.Schema4+Migrations.Schema5+Migrations.Schema6+Migrations.Schema7+Migrations.Schema8+Migrations.Schema9+Migrations.Schema10+Migrations.Schema11+Migrations.Schema12+Migrations.Schema13+Migrations.Schema14+Migrations.Schema15+" PRAGMA application_id="+ApplicationId+"; PRAGMA user_version="+SchemaVersion+";");
                     db.Execute("INSERT INTO app_info(key,value) VALUES('workspace_id',?)",Guid.NewGuid().ToString());
                     db.Execute("INSERT INTO app_info(key,value) VALUES('revision','0')"); db.Execute("COMMIT");
                 } catch { Rollback(db); throw; }
@@ -133,9 +133,9 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             foreach(object[] row in db.Query("SELECT status,total FROM bucket_totals",new object[0],4)) { int i=Array.IndexOf(names,(string)row[0]); if(i>=0) totals[i]=(long)row[1]; } return totals;
         }
         internal static string Filter(PageRequest r,List<object> p) {
-            bool draft=r.Bucket==DraftReview.Bucket;
-            if(!draft && !new[]{"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"}.Contains(r.Bucket)) throw new ArgumentException("Invalid bucket");
-            p.Add(draft ? "TO_REVIEW" : r.Bucket); string where="g.status=? AND g.retired=0";
+            bool draft=r.Bucket==DraftReview.Bucket,stego=r.Bucket==StegoFindings.Bucket;
+            if(!draft && !stego && !new[]{"TO_REVIEW","COMPLIANT","NON_COMPLIANT","EVIDENCE"}.Contains(r.Bucket)) throw new ArgumentException("Invalid bucket");
+            string where;if(stego)where=StegoFindings.Filter;else{p.Add(draft ? "TO_REVIEW" : r.Bucket);where="g.status=? AND g.retired=0";}
             if(draft)where+=" AND "+DraftReview.SuggestionFilter(r.UseGemma,r.AiScoreModel);
             if(!String.IsNullOrEmpty(r.RootId)) { where+=" AND (g.root_id=? OR EXISTS(SELECT 1 FROM group_occurrences filter_root WHERE filter_root.group_id=g.id AND filter_root.root_id=?))"; p.Add(r.RootId);p.Add(r.RootId); }
             if(r.Filter=="notes") where+=" AND length(trim(g.notes))>0";
@@ -170,7 +170,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 result.MarqoThreshold=DraftReview.Threshold(db,false);result.GemmaThreshold=DraftReview.Threshold(db,true);
                 result.GemmaCpuOnly=DraftReview.GemmaCpuOnly(db);
                 result.AiThreshold=r.UseGemma ? result.GemmaThreshold : result.MarqoThreshold;
-                result.AiTotal=DraftReview.Count(db,r.UseGemma,r.AiScoreModel);
+                result.AiTotal=DraftReview.Count(db,r.UseGemma,r.AiScoreModel);result.StegoTotal=StegoFindings.Count(db);
                 db.Execute("COMMIT");
                 return result;
             }catch{Rollback(db);throw;}
@@ -222,7 +222,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 case "size":key="c.size";break;
                 case "modified":key="o.modified_ticks";break;
                 case "reviewer":key="g.reviewer COLLATE NOCASE";break;
-                default:return request.Bucket==DraftReview.Bucket ? DraftReview.ScoreSql(request.AiScoreModel)+" DESC,g.display_sequence" : "g.display_sequence";
+                default:if(request.Bucket==StegoFindings.Bucket)return StegoFindings.ScoreSql+" DESC,g.display_sequence";return request.Bucket==DraftReview.Bucket ? DraftReview.ScoreSql(request.AiScoreModel)+" DESC,g.display_sequence" : "g.display_sequence";
             }
             bool descending=request.SortDescending??request.Sort=="size";
             return key+(descending ? " DESC" : " ASC")+",g.display_sequence";
@@ -240,11 +240,13 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                     if(rows.Count==0) throw new InvalidOperationException("A selected review group no longer exists; selection is retained.");
                     long expected;if(r.ExpectedRevisions!=null && (!r.ExpectedRevisions.TryGetValue(id,out expected) || expected!=(long)rows[0][2]))throw new InvalidOperationException("The inspected review changed. Reload its current review before saving; your draft was retained.");
                     if((string)rows[0][0]=="EVIDENCE") throw new InvalidOperationException("Imported Evidence is preserved and locked. Unlocking/reclassifying Evidence is not implemented in this slice.");
-                    bool extended=HasExtendedReviewText(db,id);
-                    db.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,r.Notes,Now(),id);
+                    bool extended=HasExtendedReviewText(db,id);bool keepNotes=r.Notes.Length==0 && db.Scalar("SELECT 1 FROM stego_flags sf JOIN review_groups g ON g.id=sf.group_id AND g.content_id=sf.content_id WHERE g.id=?",id)!=null;string reviewNotes=keepNotes ? (string)db.Scalar("SELECT substr(notes,1,16384) FROM review_groups WHERE id=?",id) : StegoFindings.ReviewNotes(db,id,r.Notes);
+                    if(keepNotes)db.Execute("UPDATE review_groups SET status=?,reviewer=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,Now(),id);
+                    else db.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,reviewNotes,Now(),id);
+                    db.Execute("UPDATE stego_flags SET review_operation=? WHERE group_id=? AND review_operation=''",r.OperationId,id);
                     if(!extended)revisions.Add(id,ReviewRevision(db,id));
-                    ImportedFields.Delete(db,"review_groups",id,"notes");ImportedFields.Delete(db,"review_groups",id,"reviewer");
-                    db.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),id,rows[0][1],rows[0][0],r.Status,Now(),r.Reviewer,r.Notes,r.OperationId);
+                    if(!keepNotes)ImportedFields.Delete(db,"review_groups",id,"notes");ImportedFields.Delete(db,"review_groups",id,"reviewer");
+                    db.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),id,rows[0][1],rows[0][0],r.Status,Now(),r.Reviewer,reviewNotes,r.OperationId);
                 }
                 long revision=Bump(db); db.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,digest,Now(),revision); db.Execute("COMMIT"); return revisions;
             } catch { Rollback(db); throw; }
@@ -290,6 +292,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             if(result.Reconnection!=null)cost+=result.Reconnection.Cost;
             if(result.Inspector!=null)cost+=result.Inspector.Cost;if(result.Locations!=null)cost+=result.Locations.Cost;
             if(result.Preferences!=null)cost+=result.Preferences.Cost;
+            if(result.StegoState!=null)cost+=1024+result.StegoState.Results.Count*1024;
             if(result.ReviewRevisions!=null)cost+=64L*result.ReviewRevisions.Count;
             if(!closing) { try { results.Add(result,cost,stop.Token);return; } catch(OperationCanceledException) {} }
             if(result.Evidence!=null)result.Evidence.Dispose();
@@ -333,6 +336,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 // Only runs present before any worker starts are eligible for automatic cleanup.
                 db.Execute("UPDATE identity_runs SET state='abandoned' WHERE state IN('checking','prepared')");
                 bool recoverIdentity=db.Scalar("SELECT 1 FROM identity_runs WHERE state='abandoned' LIMIT 1")!=null;
+                StegoFindings.Restore(db,stop.Token);
                 Update(s=>{s.Stage="Ready";s.Revision=Catalog.Revision(db);s.PublishedGroups=Catalog.Totals(db).Sum();s.ResumeId=(string)db.Scalar("SELECT id FROM scans WHERE state NOT IN('complete','complete_errors') ORDER BY started_at DESC LIMIT 1")??"";});
                 for(int i=0;i<2;i++) { var reader=new Thread(ReaderMain) { IsBackground=true,Name="MediaReviewer reader "+i }; readers.Add(reader); reader.Start(); }
                 StartOperations(db);ready=true; DateTime checkpoint=DateTime.UtcNow;

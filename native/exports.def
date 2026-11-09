@@ -1,5 +1,8 @@
 EXPORTS
     mcr_decode
+    mcr_gif_open
+    mcr_gif_next
+    mcr_gif_close
     mcr_playback
     mcr_draft_open
     mcr_draft_score

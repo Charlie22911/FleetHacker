@@ -1,10 +1,16 @@
 # Windows hidden data analysis
 
-Place the matching `FleetHacker.Steganography.exe` beside `Media Compliance Reviewer.exe` on x64 Windows 10 or later. The **Hidden data analysis** control appears when the file is present. Each application build verifies its companion's SHA-256 before starting it. The companion contains its own Python, Ruby and app-local Microsoft runtime files, model weights, and native Windows Binwalk. It needs no installed interpreter, installer, administrator access, or runtime downloads.
+Place the matching `FleetHacker.Steganography.exe` beside `Media Compliance Reviewer.exe` on x64 Windows 10 or later. The **Hidden data scan** control appears when the file is present. Each application build verifies its companion's SHA-256 before starting it. The companion contains its own Python, Ruby and app-local Microsoft runtime files, model weights, and native Windows Binwalk. It needs no installed interpreter, installer, administrator access, or runtime downloads.
 
-Select up to 200 ordinary items, open **Hidden data analysis**, and choose **Analyze selected**. Analysis uses original PNG, JPEG and BMP bytes, including connected ZIP members. It checks the recorded source identity, makes a private copy, computes full SHA-256, and checks the result's identity before saving. Originals and compliance decisions are unchanged. Evidence items are excluded. Cancel stops the owned process tree; completed database results remain available.
+Open **Hidden data scan** and choose **Start scan**. The scan finds unchecked photos throughout the open database, across review queues and pages. No selection is needed. It uses original PNG, JPEG and BMP bytes, including connected ZIP members. Other photo types receive a not-supported result. Evidence items and retired source locations are excluded.
 
-**Saved results** shows engine outcomes and findings for the selected item's current identity. **Export latest result as JSON** includes raw detector output, model scores, engine configurations, limitations, the original fingerprint, package fingerprint, and timestamp. Old runs remain in the database. These metadata and results are not encrypted.
+Finished checks are saved for each photo's current identity and scan package. Running the scan again skips those photos and retries failed, interrupted or unavailable checks. Cancel preserves finished results so the next scan can continue with the remaining photos. A changed photo identity or matching package version requires a new check. Checks that finish with known coverage limits remain labeled as limited.
+
+Suspect photos appear in the **Steganography** review bucket, highest suspicion index first. The scan opens that bucket when it finishes. Existing saved findings are integrated when an older database opens, without rerunning detectors. Each suspect photo receives notes with its check time, evidence confidence, possible method or embedded file type, detector scores and coverage limits. Confidence describes evidence strength; it is not a calibrated probability. Existing notes are preserved. If a notes field is full or contains preserved imported text, the findings remain available in a separate read-only section of Details / notes.
+
+Marking a suspect photo Compliant, Non-compliant or Back to review resolves its steganography review flag. Undo restores the flag for that review. A repeated check with the same evidence preserves a completed human review; new evidence or a different analysis package can flag the photo again.
+
+The scan window shows progress and a paged list of photo names and results. Select a row and choose **View result** for a plain-language explanation. **Technical details** contains engine availability and **Export result as JSON**, including raw detector output, model scores, configurations, limitations and fingerprints. Originals and review decisions are unchanged. Results and metadata are not encrypted.
 
 ## Coverage and limits
 
@@ -16,7 +22,7 @@ The suspicion index is a versioned heuristic, not a probability: validated ZIP p
 
 Each original is limited to 256 MiB and 32 million pixels. Original reads run in a separate owned process with a 60-second limit, including network and ZIP sources. Engine output, findings, processing time, process count, and memory are bounded. Reaching a result limit makes coverage partial. A session unpacks about 2.3 GB into a private, nonce-marked local temporary directory; allow at least 4 GB of free local space. It removes that directory after its owned processes exit. An interrupted application can leave a temporary directory for manual cleanup.
 
-Database schema 14 adds analysis history. Opening an older native database makes a pre-upgrade backup. Older Windows builds cannot open the upgraded copy; retain that backup when older versions are needed.
+Database schema 15 adds steganography review flags alongside analysis history. Opening an older native database makes a pre-upgrade backup. Older Windows builds cannot open the upgraded copy; retain that backup when older versions are needed.
 
 ## Build
 

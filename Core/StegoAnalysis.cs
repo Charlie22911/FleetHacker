@@ -20,6 +20,8 @@ namespace MediaReviewer {
             PreviewTransaction(db,()=>{
                 if(db.Scalar("SELECT 1 FROM review_groups WHERE id=? AND content_id=? AND retired=0 AND status<>'EVIDENCE'",group,content)==null)throw new InvalidOperationException("This item's identity or protection changed; analysis was discarded");
                 db.Execute("INSERT INTO stego_runs VALUES(?,?,?,?,?,?,?,?,?)",id,group,content,sha,package,at,state,index.HasValue ? (object)index.Value : null,result);
+                StegoFindings.Attach(db,id,group,content,sha,package,value,at);
+                db.Execute("UPDATE stego_runs SET result_json=? WHERE id=?",json.Serialize(value),id);
                 Bump(db);
             });return id;
         }
@@ -29,30 +31,37 @@ namespace MediaReviewer {
         volatile bool stegoActive;
         public bool StegoAnalysisActive {get{return stegoActive;}}
         OperationProgress GetStegoProgress(string id){lock(stegoGate)return stegoProgress!=null && stegoProgress.RequestId==id ? stegoProgress.Copy() : null;}
-        bool CancelStego(string id){lock(stegoGate){if(stegoProgress==null || stegoProgress.RequestId!=id)return false;if(stegoCancel!=null){stegoCancel.Cancel();stegoProgress.State="cancelling";stegoProgress.Stage="Stopping hidden data analysis";}return true;}}
+        bool CancelStego(string id){lock(stegoGate){if(stegoProgress==null || stegoProgress.RequestId!=id)return false;if(stegoCancel!=null){stegoCancel.Cancel();stegoProgress.State="cancelling";stegoProgress.Stage="Stopping scan…";}return true;}}
         void StegoStage(string text,long done,long total){lock(stegoGate){stegoProgress.Stage=text;stegoProgress.Completed=done;stegoProgress.Total=total;stegoProgress.LastProgressUtc=DateTime.UtcNow;}}
-        public string RequestStegoAnalysis(long[] groups){
-            if(groups==null || groups.Length<1 || groups.Length>200 || groups.Any(g=>g<1))throw new ArgumentException("Select 1 through 200 ordinary items for analysis");
-            var ids=groups.Distinct().ToArray();string id=Guid.NewGuid().ToString("N");
+        public string RequestStegoScan(){return StartStego(null);}
+        internal string RequestStegoScan(Func<string,string,CancellationToken,IStegoSession> factory){return StartStego(factory);}
+        string StartStego(Func<string,string,CancellationToken,IStegoSession> factory){
+            string id=Guid.NewGuid().ToString("N");
             lock(scanGate){
                 if(!ready || closing || faulted || reportActive || sourceConnectionBusy || DraftReviewActive || stegoActive || scan!=null&&!scan.Finished)throw new InvalidOperationException("Wait for the scan or analysis to finish before starting hidden data analysis");
                 if(stegoThread!=null && stegoThread.IsAlive)throw new InvalidOperationException("The previous analysis is finishing; try again shortly");
-                lock(stegoGate){stegoCancel=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);stegoProgress=new OperationProgress {RequestId=id,Kind="Hidden data analysis",State="running",Stage="Preparing analysis package",Total=ids.Length,Unit="items"};stegoActive=true;
-                    stegoThread=new Thread(()=>StegoMain(id,ids)){IsBackground=true,Name="FleetHacker hidden data analysis"};stegoThread.Start();}
+                lock(stegoGate){stegoCancel=CancellationTokenSource.CreateLinkedTokenSource(stop.Token);stegoProgress=new OperationProgress {RequestId=id,Kind="Hidden data scan",State="running",Stage="Getting ready…",Total=null,Unit="items"};stegoActive=true;
+                    stegoThread=new Thread(()=>StegoMain(id,factory)){IsBackground=true,Name="FleetHacker hidden data scan"};stegoThread.Start();}
             }return id;
         }
-        void StegoMain(string request,long[] groups){
-            string error="";int saved=0,skipped=0;var notes=new List<string>();CancellationToken token=stegoCancel.Token;
+        void StegoMain(string request,Func<string,string,CancellationToken,IStegoSession> factory){
+            string error="";long saved=0,skipped=0,attempted=0,suspects=0;CancellationToken token=stegoCancel.Token;
             try{
                 string directory;using(var own=Process.GetCurrentProcess())directory=Path.GetDirectoryName(own.MainModule.FileName);
                 string package=StegoCompanion.EmbeddedPin();
-                using(var reader=new SqliteConnection(path,true))using(var session=new StegoSession(directory,package,token)){
+                using(var reader=new SqliteConnection(path,true)){
                     reader.Script("PRAGMA query_only=ON; PRAGMA cache_size=-8192; PRAGMA mmap_size=0;");
-                    for(int i=0;i<groups.Length;i++){
-                        token.ThrowIfCancellationRequested();long group=groups[i];StegoStage("Analyzing item "+(i+1)+" of "+groups.Length,i,groups.Length);
+                    long ceiling=Convert.ToInt64(reader.Scalar("SELECT COALESCE(MAX(id),0) FROM review_groups"));
+                    long total=StegoScan.Pending(reader,package,ceiling);
+                    StegoStage(total==0 ? "All photos are already checked." : "Getting ready to check "+total+" photos…",0,total);
+                    IStegoSession session=null;
+                    try{foreach(long group in StegoScan.Candidates(reader,package,ceiling,token)){
+                        token.ThrowIfCancellationRequested();
+                        if(session==null)session=factory==null ? new StegoSession(directory,package,token) : factory(directory,package,token);
+                        StegoStage("Checking photo "+(attempted+1)+" of "+total,attempted,total);attempted++;
                         var identity=reader.Query("SELECT g.content_id,c.algorithm,c.algorithm_version,c.sampling,c.digest FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0 AND g.status<>'EVIDENCE'",new object[]{group},1);
-                        if(identity.Count!=1){skipped++;notes.Add("Item "+group+": unavailable or protected");continue;}
-                        var row=identity[0];long content=(long)row[0];string snapshot=Path.Combine(session.Work,"original-"+i+".input"),digest=null,recorded=null;Exception sourceError=null;
+                        if(identity.Count!=1){skipped++;continue;}
+                        var row=identity[0];long content=(long)row[0];string snapshot=Path.Combine(session.Work,"original-"+attempted+".input"),digest=null,recorded=null;Exception sourceError=null;
                         foreach(var source in Catalog.RecordedSources(reader,group,content,false,token)){
                             try{
                                 recorded=Catalog.PreviewSourcePath((string)source[0],(string)source[1]);
@@ -62,38 +71,42 @@ namespace MediaReviewer {
                                 sourceError=null;break;
                             }catch(OperationCanceledException){throw;}catch(Exception failure){sourceError=failure;digest=null;if(File.Exists(snapshot))File.Delete(snapshot);}
                         }
-                        if(digest==null){skipped++;notes.Add("Item "+group+": "+(sourceError==null ? "No current original is connected" : sourceError.Message));continue;}
+                        if(digest==null){skipped++;WaitWrite(db=>{Catalog.Log(db,"warning","Hidden data scan",recorded??"",sourceError==null ? "Original file is not connected." : sourceError.Message);return null;},70000);continue;}
                         try{
                             string result=session.Analyze(snapshot,digest,token);token.ThrowIfCancellationRequested();
-                            WaitWrite(db=>Catalog.SaveStego(db,group,content,digest,package,result,recorded),2100000);saved++;
+                            bool accepted=(bool)WaitWrite(db=>{if(db.Scalar("SELECT 1 FROM review_groups WHERE id=? AND content_id=? AND retired=0 AND status<>'EVIDENCE'",group,content)==null)return false;Catalog.SaveStego(db,group,content,digest,package,result,recorded);return true;},2100000);if(accepted)saved++;else skipped++;
                         }finally{File.Delete(snapshot);}
-                        StegoStage("Saved "+saved+" analysis result(s)",i+1,groups.Length);
-                    }
+                        StegoStage("Checked "+saved+" photos",attempted,total);
+                    }}finally{if(session!=null)session.Dispose();}
+                    suspects=StegoFindings.Count(reader);
                 }
-            }catch(Exception failure){error=token.IsCancellationRequested ? "Hidden data analysis cancelled. Completed results were retained." : failure.Message;}
+            }catch(Exception failure){error=token.IsCancellationRequested ? "Scan stopped. Finished checks are saved." : failure.Message;}
             finally{
-                string summary="Saved "+saved+" analysis result(s); "+skipped+" skipped. Compliance decisions were unchanged.";
-                if(notes.Count>0)summary+="\n"+String.Join("\n",notes);
+                string summary=attempted==0 ? "All photos are already checked." : "Checked "+saved+" photo"+(saved==1 ? "" : "s")+"."+(skipped==0 ? "" : " "+skipped+" could not be checked.");
+                if(error.Length==0)summary+=" "+suspects+" suspect photo"+(suspects==1 ? " is" : "s are")+" in Steganography.";
                 lock(stegoGate){stegoProgress.State=error.Length==0 ? "complete" : token.IsCancellationRequested ? "cancelled" : "failed";stegoProgress.Stage=error.Length==0 ? summary : error;stegoProgress.Error=error;stegoCancel.Dispose();stegoCancel=null;stegoActive=false;}
-                Respond(new UiResult {RequestId=request,Kind="Hidden data analysis",Success=error.Length==0,Error=error,Value=summary});
+                Respond(new UiResult {RequestId=request,Kind="Hidden data scan",Success=error.Length==0,Error=error,Value=summary});
             }
         }
         public string RequestStegoHistory(long group){
-            return EnqueueOperation("Hidden data results",(db,token,progress)=>{
-                var rows=db.Query("SELECT s.created_at,s.status,s.suspicion_index,s.original_sha256,s.package_sha256,s.result_json FROM stego_runs s JOIN review_groups g ON g.id=s.group_id WHERE s.group_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND s.content_id=g.content_id ORDER BY s.created_at DESC,s.id DESC LIMIT 10",new object[]{group},10);
-                if(rows.Count==0)return "No saved analysis for this item's current identity.";
-                var text=new System.Text.StringBuilder();var json=new JavaScriptSerializer {MaxJsonLength=1048576,RecursionLimit=32};
-                foreach(var row in rows){
-                    text.AppendLine((string)row[0]+" | "+row[1]+" | suspicion index: "+(row[2]??"unavailable"));
-                    text.AppendLine("Original SHA-256: "+row[3]);
-                    var value=json.Deserialize<Dictionary<string,object>>((string)row[5]);object engineRecords;
-                    if(value.TryGetValue("engines",out engineRecords))foreach(var item in (System.Collections.IEnumerable)engineRecords){var engine=(Dictionary<string,object>)item;text.AppendLine("  "+engine["id"]+": "+engine["state"]+(engine.ContainsKey("reason") ? " - "+engine["reason"] : ""));}
-                    object findings;if(value.TryGetValue("findings",out findings))foreach(var item in ((System.Collections.IEnumerable)findings).Cast<Dictionary<string,object>>().Take(50))text.AppendLine("  "+item["engine"]+" / "+item["method"]+": "+item["explanation"]);
-                    text.AppendLine("Export JSON for raw detector output, configuration, scores and coverage warnings.").AppendLine();
-                }return text.ToString();
+            return EnqueueOperation("Photo result",(db,token,progress)=>{
+                var rows=db.Query("SELECT s.status,s.suspicion_index,s.result_json FROM stego_runs s JOIN review_groups g ON g.id=s.group_id WHERE s.group_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND s.content_id=g.content_id AND s.package_sha256=? ORDER BY s.created_at DESC,s.id DESC LIMIT 1",new object[]{group,StegoCompanion.EmbeddedPin()},1);
+                if(rows.Count==0)return "No saved result is available for this photo.";
+                var row=rows[0];string status=(string)row[0];var value=new JavaScriptSerializer {MaxJsonLength=1048576,RecursionLimit=32}.Deserialize<Dictionary<string,object>>((string)row[2]);
+                bool failed=false;object records;if(value.TryGetValue("engines",out records))foreach(var item in (System.Collections.IEnumerable)records){var engine=(Dictionary<string,object>)item;string state=engine["state"] as string;if(new[]{"failed","timed_out","unavailable","cancelled"}.Contains(state))failed=true;}
+                var text=new System.Text.StringBuilder();text.AppendLine(StegoScan.Outcome(status,row[1],failed)).AppendLine();
+                if(row[1]!=null && Convert.ToInt64(row[1])>=80)text.AppendLine("An embedded file was found in this photo.");
+                else if(row[1]!=null && Convert.ToInt64(row[1])>0)text.AppendLine("The scan found possible signs of hidden data. Review this photo before making a decision.");
+                else if(failed)text.AppendLine("The scan could not finish checking this photo.");
+                else if(status=="unsupported")text.AppendLine("This photo type is not supported. JPEG, PNG and BMP photos can be checked.");
+                else if(status=="limited")text.AppendLine("This photo is larger than the scan can process.");
+                else text.AppendLine("The checks that ran found no signs of hidden data.");
+                if(failed)text.AppendLine("Some checks could not finish. Run the scan again to retry this photo.");
+                if(status=="partial" || failed)text.AppendLine("This was a limited check. Some hidden data may not be detected.");
+                text.AppendLine().AppendLine("A scan result does not change the photo's review decision.");object source;if(value.TryGetValue("source",out source))text.AppendLine().AppendLine("File: "+source);return text.ToString();
             });
         }
-        public string RequestStegoJson(long group){return EnqueueOperation("Hidden data JSON",(db,token,progress)=>(string)db.Scalar("SELECT s.result_json FROM stego_runs s JOIN review_groups g ON g.id=s.group_id WHERE s.group_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND s.content_id=g.content_id ORDER BY s.created_at DESC,s.id DESC LIMIT 1",group)??"{}");}
+        public string RequestStegoJson(long group){return EnqueueOperation("Export result",(db,token,progress)=>(string)db.Scalar("SELECT s.result_json FROM stego_runs s JOIN review_groups g ON g.id=s.group_id WHERE s.group_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND s.content_id=g.content_id AND s.package_sha256=? ORDER BY s.created_at DESC,s.id DESC LIMIT 1",group,StegoCompanion.EmbeddedPin())??"{}");}
         void StopStegoAnalysis(){Thread thread;lock(stegoGate){if(stegoCancel!=null)stegoCancel.Cancel();thread=stegoThread;}if(thread!=null && thread!=Thread.CurrentThread)thread.Join();}
     }
 }

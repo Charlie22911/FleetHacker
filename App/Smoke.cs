@@ -62,7 +62,7 @@ namespace MediaReviewer {
             var queues=(ComboBox)window.FindName("ViewBox");queues.ApplyTemplate();queues.IsDropDownOpen=true;
             window.Dispatcher.Invoke(new Action(()=>{}),System.Windows.Threading.DispatcherPriority.ApplicationIdle);
             var popup=queues.Template.FindName("PART_Popup",queues) as Popup;
-            Check(popup!=null && popup.IsOpen && queues.Items.Count==5,"The themed compact dropdown must show the review queues.");
+            Check(popup!=null && popup.IsOpen && queues.Items.Count==6,"The themed compact dropdown must show all six review queues, including Steganography.");
             queues.IsDropDownOpen=false;
             top.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(!scan.IsVisible && top.IsVisible && (string)top.Content=="Down" && sidebarButton.IsVisible && previewButton.IsVisible,

@@ -35,8 +35,8 @@ namespace MediaReviewer {
     }
     internal sealed class ReviewUndoItem {
         internal long GroupId,PriorRevision,ExpectedRevision;
-        internal string Status,Reviewer,Notes;
-        internal long Cost {get{return 256+2L*(Reviewer.Length+Notes.Length);}}
+        internal string Status,Reviewer,Notes,ReviewOperationId="";
+        internal long Cost {get{return 256+2L*(Reviewer.Length+Notes.Length+(ReviewOperationId??"").Length);}}
         internal ReviewUndoItem Copy(){return (ReviewUndoItem)MemberwiseClone();}
     }
     public sealed class MediaRow {
@@ -52,7 +52,7 @@ namespace MediaReviewer {
     }
     public sealed class PageData {
         public List<MediaRow> Rows=new List<MediaRow>(); public long Total,Revision;
-        public long AiTotal;
+        public long AiTotal,StegoTotal;
         public int AiThreshold=DraftReview.DefaultMarqoThreshold;
         public int MarqoThreshold=DraftReview.DefaultMarqoThreshold,GemmaThreshold=DraftReview.DefaultGemmaThreshold;
         public bool GemmaCpuOnly;
@@ -68,6 +68,7 @@ namespace MediaReviewer {
         public IdentityResolutionPreview IdentityPreview;
         public InspectorData Inspector;public LocationPage Locations;
         public ReviewPreferences Preferences;
+        public StegoScanState StegoState;
         public SourceConnection SourceConnection;public SourceRootPage SourceRoots;
         public ReconnectBatch Reconnection;
         public PreviewRetryBatch PreviewRetry;public List<PreviewRetryBatch> PreviewRetries;

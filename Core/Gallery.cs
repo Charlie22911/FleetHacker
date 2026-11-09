@@ -9,7 +9,7 @@ using System.Windows.Media.Imaging;
 namespace MediaReviewer {
     public sealed class CardItem:INotifyPropertyChanged {
         public MediaRow Record { get; private set; }
-        bool selected,pending; BitmapSource image; string imageError;
+        bool selected,pending; BitmapSource image,animationImage; string imageError;
         public bool ImageQueued;
         public CardItem(MediaRow record) { Record=record; }
         public string Name { get { return Record.Name; } }
@@ -42,18 +42,19 @@ namespace MediaReviewer {
         public string FingerprintLabel { get { return (Record.Algorithm=="sha256" ? "Full SHA-256" : "Quick candidate match")+(Record.AiScore.HasValue ? (Record.AiGemma ? " · Gemma priority " : " · Marqo score ")+Record.AiScore.Value.ToString("P0") : ""); } }
         public string PreviewRetryLabel {get{return String.IsNullOrEmpty(Record.PreviewRetryState) ? "" : "Preview retry: "+Record.PreviewRetryState;}}
         public string Placeholder { get { return imageError ?? (Record.PreviewState=="unavailable" || Record.PreviewState=="protected" ? (String.IsNullOrEmpty(Record.PreviewError) ? "Preview unavailable" : Record.PreviewError) : Record.PreviewBytes==null && Record.PreviewState!="available" ? "Preview pending" : "Loading preview"); } }
-        public BitmapSource Image { get { return image; } }
-        public Visibility PlaceholderVisibility { get { return image==null ? Visibility.Visible : Visibility.Collapsed; } }
+        public BitmapSource Image { get { return animationImage??image; } }
+        public Visibility PlaceholderVisibility { get { return Image==null ? Visibility.Visible : Visibility.Collapsed; } }
         public bool IsSelected { get { return selected; } set { if(selected!=value){selected=value;Changed("IsSelected");} } }
         public bool IsPending { get { return pending; } set { if(pending!=value){pending=value;Changed("IsPending");Changed("CanSelect");} } }
         public bool CanSelect { get { return !pending; } }
         public bool CanLoadImage { get { return image==null && imageError==null && !ImageQueued && Record.PreviewBytes!=null; } }
         public void SetImage(BitmapSource source,string error) { image=source; imageError=error; ImageQueued=false; Changed("Image");Changed("Placeholder");Changed("PlaceholderVisibility"); }
+        internal void SetAnimationImage(BitmapSource source){if(ReferenceEquals(animationImage,source))return;animationImage=source;Changed("Image");Changed("PlaceholderVisibility");}
         public void Update(MediaRow record) {
             bool changed=Record.ContentId!=record.ContentId || Record.PreviewRevision!=record.PreviewRevision;
             if(!changed && record.PreviewBytes==null)record.PreviewBytes=Record.PreviewBytes;
             Record=record;
-            if(changed){image=null;imageError=null;ImageQueued=false;Changed("Image");Changed("PlaceholderVisibility");}
+            if(changed){image=null;animationImage=null;imageError=null;ImageQueued=false;Changed("Image");Changed("PlaceholderVisibility");}
             if(image!=null) Record.PreviewBytes=null; Changed("Name");Changed("PathLabel");Changed("FullPath");Changed("Info");Changed("FingerprintLabel");Changed("Placeholder");Changed("PreviewRetryLabel");Changed("FolderLabel");Changed("TypeLabel");Changed("SizeLabel");Changed("ModifiedLabel");Changed("ReviewerLabel");Changed("IsRenamed");Changed("RenamedBadgeVisibility");Changed("MultiLocationBadgeVisibility");Changed("LocationBadgeText");Changed("NotesBadgeVisibility");Changed("NotesPreview");Changed("HashBadge");Changed("DimensionsLabel"); }
         public event PropertyChangedEventHandler PropertyChanged;
         void Changed(string name) { var handler=PropertyChanged; if(handler!=null) handler(this,new PropertyChangedEventArgs(name)); }

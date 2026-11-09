@@ -293,6 +293,7 @@
       <Button x:Name="Queue2" Content="🚩  Non-compliant (0)" Style="{StaticResource QueueButton}"/>
       <Button x:Name="Queue3" Content="🔒  Evidence (0)" Style="{StaticResource QueueButton}"/>
       <Button x:Name="Queue4" Content="◇  AI suggestions (0)" Style="{StaticResource QueueButton}" ToolTip="Items above the AI threshold that still need a human decision. By default, highest score comes first."/>
+      <Button x:Name="Queue5" Content="🔎  Steganography (0)" Style="{StaticResource QueueButton}" ToolTip="Suspect hidden-data findings awaiting review. Scan details are saved in each photo's notes."/>
       <TextBlock Text="HOW TO BROWSE" Margin="10,16,0,6" Opacity="0.72" FontSize="11" FontWeight="SemiBold"/>
       <WrapPanel>
         <WrapPanel.Resources><Style TargetType="Button" BasedOn="{StaticResource SidebarToolButton}"/></WrapPanel.Resources>
@@ -319,7 +320,7 @@
     <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
     <DockPanel x:Name="TopHeaderBar" Grid.Row="0" Margin="0,0,0,4">
       <Button x:Name="SettingsCogButton" DockPanel.Dock="Right" Content="⚙" Width="34" Height="34" Padding="0" FontSize="16" VerticalAlignment="Center" ToolTip="Settings, database, scan options, appearance, and tools"/>
-      <StackPanel x:Name="CompactQueues" DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,10,0"><TextBlock Text="Space" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4"/><ComboBox x:Name="ViewBox" Width="195" SelectedIndex="0" AutomationProperties.Name="Review queue"><ComboBoxItem Content="To be reviewed (0)"/><ComboBoxItem Content="Compliant (0)"/><ComboBoxItem Content="Non-compliant (0)"/><ComboBoxItem Content="Evidence (0)"/><ComboBoxItem Content="AI suggestions (0)"/></ComboBox></StackPanel>
+      <StackPanel x:Name="CompactQueues" DockPanel.Dock="Left" Orientation="Horizontal" Margin="0,0,10,0"><TextBlock Text="Space" FontWeight="SemiBold" VerticalAlignment="Center" Margin="4"/><ComboBox x:Name="ViewBox" Width="195" SelectedIndex="0" AutomationProperties.Name="Review queue"><ComboBoxItem Content="To be reviewed (0)"/><ComboBoxItem Content="Compliant (0)"/><ComboBoxItem Content="Non-compliant (0)"/><ComboBoxItem Content="Evidence (0)"/><ComboBoxItem Content="AI suggestions (0)"/><ComboBoxItem Content="Steganography (0)"/></ComboBox></StackPanel>
       <TextBlock x:Name="DatabaseLabel" Text="☀ Welcome · click ⚙ in the top right to open or create a database" Foreground="{DynamicResource MutedBrush}" FontWeight="SemiBold" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="6,0,8,0" ToolTip="{Binding Text,RelativeSource={RelativeSource Self}}"/>
     </DockPanel>
     <ScrollViewer x:Name="TopControls" Grid.Row="1" MaxHeight="340" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
@@ -334,7 +335,7 @@
           <Button x:Name="ResumeButton" Content="▶ Resume" ToolTip="Pick up your saved scan right where it left off"/>
           <Button x:Name="CancelButton" Content="Pause scan"/>
           <Button x:Name="AiDraftButton" Content="AI draft check…" ToolTip="Run an offline draft check on saved previews or adjust the AI threshold"/>
-          <Button x:Name="SteganographyButton" Content="Hidden data…" Visibility="Collapsed" ToolTip="Analysis package status"/>
+          <Button x:Name="SteganographyButton" Content="Hidden data scan…" Visibility="Collapsed" ToolTip="Check unchecked photos for hidden data"/>
           <Button x:Name="ScanCogButton" Visibility="Collapsed" Content="⚙"/>
         </WrapPanel>
         <Expander x:Name="ScanSettingsExpander" Visibility="Collapsed" Header="Scan settings · Quick · 4 workers">

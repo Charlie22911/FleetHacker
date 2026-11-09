@@ -112,6 +112,10 @@ namespace MediaReviewer {
                     if(directory!=Native.RuntimeDirectory && IsPrivateDirectory(directory))RecoverDirectory(directory);
             }catch(IOException){}catch(UnauthorizedAccessException){}
         }
+        internal static void RecoverWorker(string directory){
+            try{if(directory!=Native.RuntimeDirectory && IsPrivateDirectory(directory))RecoverDirectory(directory);}
+            catch(ArgumentException){}catch(NotSupportedException){}catch(IOException){}catch(UnauthorizedAccessException){}
+        }
         static void RecoverDirectory(string directory) {
             try{
                 string marker=Path.Combine(directory,Marker),identity;

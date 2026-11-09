@@ -15,11 +15,11 @@ namespace MediaReviewer {
         }
 
         internal static Dictionary<long,long> UndoReview(SqliteConnection db,ReviewUndoItem[] items,string operation) {
-            var payload=new StringBuilder("undo-review-v1\n");
+            var payload=new StringBuilder("undo-review-v2\n");
             foreach(var item in items) {
                 payload.Append(item.GroupId.ToString(CultureInfo.InvariantCulture)).Append('\n')
                     .Append(item.ExpectedRevision.ToString(CultureInfo.InvariantCulture)).Append('\n')
-                    .Append(item.Status).Append('\n')
+                    .Append(item.Status).Append('\n').Append(item.ReviewOperationId??"").Append('\n')
                     .Append(item.Reviewer.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(item.Reviewer)
                     .Append(item.Notes.Length.ToString(CultureInfo.InvariantCulture)).Append(':').Append(item.Notes).Append('\n');
             }
@@ -35,6 +35,7 @@ namespace MediaReviewer {
                         throw new InvalidOperationException("A selected item has changed since that review. No decisions were undone.");
                     db.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",
                         item.Status,item.Reviewer,item.Notes,now,item.GroupId);
+                    if(!String.IsNullOrEmpty(item.ReviewOperationId))db.Execute("UPDATE stego_flags SET review_operation='' WHERE group_id=? AND review_operation=?",item.GroupId,item.ReviewOperationId);
                     db.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),item.GroupId,
                         rows[0][1],rows[0][0],item.Status,now,item.Reviewer,item.Notes,operation);
                     revisions.Add(item.GroupId,ReviewRevision(db,item.GroupId));
@@ -54,7 +55,7 @@ namespace MediaReviewer {
             if(items==null || items.Length<1 || items.Length>200 || String.IsNullOrEmpty(operation) || operation.Length>100 ||
                 items.Any(item=>item==null || item.GroupId<1 || item.ExpectedRevision<0 ||
                     (item.Status!="TO_REVIEW" && item.Status!="COMPLIANT" && item.Status!="NON_COMPLIANT") ||
-                    item.Notes==null || item.Notes.Length>16384 || item.Reviewer==null || item.Reviewer.Length>128) ||
+                    item.ReviewOperationId==null || item.ReviewOperationId.Length>100 || item.Notes==null || item.Notes.Length>16384 || item.Reviewer==null || item.Reviewer.Length>128) ||
                 items.Select(item=>item.GroupId).Distinct().Count()!=items.Length)
                 throw new ArgumentException("Invalid review history entry.");
             long cost=2048+items.Sum(item=>item.Cost);

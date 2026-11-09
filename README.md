@@ -19,7 +19,7 @@ Open the downloaded HTML directly in desktop Chrome, Edge, or Firefox. It provid
 
 ## Optional hidden data analysis
 
-An optional Windows [hidden data analysis package](steganography/README.md) adds original-byte PNG, JPEG and BMP checks with Aletheia color models, zsteg and native Binwalk. Place the matching companion beside the application to expose its controls. Saved results and JSON exports retain engine coverage and findings separately from compliance decisions. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
+An optional Windows [hidden data analysis package](steganography/README.md) checks unchecked photos throughout the database with Aletheia color models, zsteg and native Binwalk. Suspect photos appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
 
 ## Download Gemma for advanced AI review
 
@@ -39,6 +39,8 @@ An optional Windows [hidden data analysis package](steganography/README.md) adds
 The compact command area keeps scan controls, search and classification visible. Expand **Scan settings** for file types, workers, age exclusions and other scan options. Expand **Filters and display** for folder/type filtering, sorting and Fit/Fill. **Reviewer and notes** holds the label and notes saved with decisions; its heading indicates when notes have been entered. **More review actions** groups preview retries and identity checks separately from retained originals and Evidence tools. Collapsing a section preserves its values and the current selection. Press Enter in Search or User folder, or choose Apply, to apply the filters. Expanded controls scroll within a limited area on shorter windows.
 
 In List and Thumbnails, a successful single-item decision selects the next item for review. A newer manual selection is preserved while a decision saves. Batch decisions leave the remaining items unselected. Choose **Clear** to keep browsing without a review target.
+
+In Thumbnails, GIFs play automatically with their frame timing, transparency and loop settings. Video thumbnails cycle through 20 frames sampled across the recording. Animation is limited to visible cards and pauses when the window is minimized. On dense pages, visible motion cards take turns in bounded groups. Saved posters remain available when a source cannot be opened.
 
 The right preview loads source detail for its displayed size while retaining the saved thumbnail during loading. Its status shows source and preview dimensions. If the original is unavailable, the saved preview remains visible with a source-unavailable label. Source preview loading is separate from Inspect, including for ZIP members.
 

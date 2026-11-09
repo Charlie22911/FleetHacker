@@ -10,11 +10,14 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Web.Script.Serialization;
 namespace MediaReviewer {
-    internal sealed class StegoSession:IDisposable {
+    internal interface IStegoSession:IDisposable {string Work{get;}string Nonce{get;}string Analyze(string snapshot,string digest,CancellationToken token);}
+    internal sealed class StegoSession:IStegoSession {
         readonly JavaScriptSerializer json=new JavaScriptSerializer {MaxJsonLength=2097152,RecursionLimit=32};
         readonly string nonce=Guid.NewGuid().ToString("N");
         internal readonly string Work;
         internal string Nonce {get{return nonce;}}
+        string IStegoSession.Work {get{return Work;}}string IStegoSession.Nonce {get{return nonce;}}
+        string IStegoSession.Analyze(string snapshot,string digest,CancellationToken token){return Analyze(snapshot,digest,token);}
         FileStream pin,lease;Process process;DecoderJob job;Task<string> drain;bool started,assigned,disposed;
         internal StegoSession(string directory,string expected,CancellationToken token,Action<DecoderJob,Process> assign=null){
             Work=Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Temp","FHStego-"+nonce);

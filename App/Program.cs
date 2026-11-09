@@ -47,7 +47,7 @@ namespace MediaReviewer {
         static int Run() {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
-            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--stego-source-worker";
+            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
@@ -57,6 +57,10 @@ namespace MediaReviewer {
                 if(mode=="--draft-worker" && (args.Length==1 || args.Length==2 && (args[1]=="gemma" || args[1]=="gemma-vulkan")))return DraftModelWorker.Run(args.Length==2,args.Length==2 && args[1]=="gemma-vulkan");
                 if(mode=="--playback-worker")return PlaybackProxy.Worker();
                 MediaScratch.QueueRecovery();
+                if(mode=="--verify-stego-notes" && args.Length==2)return StegoQueueSmoke.NotesRun(args[1]);
+                if(mode=="--verify-stego-interface" && args.Length==2)return StegoQueueSmoke.InterfaceRun(args[1]);
+                if(mode=="--verify-gallery" && args.Length==2)return GalleryAnimationSmoke.Run(args[1]);
+                if(mode=="--verify-stego-queue" && args.Length==2)return StegoQueueSmoke.Run(args[1]);
                 if(mode=="--verify-stego" && args.Length==3)return StegoSmoke.Run(args[1],args[2]);
                 if(mode=="--verify-companion" && args.Length==2)return CompanionSmoke.Run(args[1]);
                 if(mode=="--verify-workflow" && args.Length==3)return WorkflowSmoke.Run(args[1],args[2]);

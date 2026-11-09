@@ -12,8 +12,8 @@ namespace MediaReviewer {
         public long GroupId,ContentId,Sequence,Size,ReviewRevision,LocationCount;
         public int AlgorithmVersion;
         public string RootPath,Status,Reviewer,Notes,ReviewedAt,Algorithm,Digest,Sampling,PreviewState,PreviewError;
-        public bool TextReadOnly;
-        internal long Cost {get{return 2048+2L*new[]{RootPath,Status,Reviewer,Notes,ReviewedAt,Algorithm,Digest,Sampling,PreviewState,PreviewError}.Sum(x=>(long)x.Length);}}
+        public bool TextReadOnly;public string StegoNotes="";
+        internal long Cost {get{return 2048+StegoNotes.Length*2L+2L*new[]{RootPath,Status,Reviewer,Notes,ReviewedAt,Algorithm,Digest,Sampling,PreviewState,PreviewError}.Sum(x=>(long)x.Length);}}
     }
     public sealed class LocationRow {
         public string Id {get;set;}public string Path {get;set;}public string RootPath {get;set;}
@@ -49,7 +49,7 @@ namespace MediaReviewer {
             if(rows.Count!=1)throw new InvalidOperationException("This item was replaced or removed; reload the gallery.");var v=rows[0];
             if((string)v[5]=="EVIDENCE")throw new ProtectedDetailsException();
             var reviewer=new ReviewText((byte[])v[6],128,(long)v[15]!=0);var notes=new ReviewText((byte[])v[7],16384,(long)v[15]!=0);
-            return new InspectorData {GroupId=group,ContentId=(long)v[0],Sequence=(long)v[1],Size=(long)v[2],ReviewRevision=(long)v[3],RootPath=(string)v[4],Status=(string)v[5],Reviewer=reviewer.Text,Notes=notes.Text,ReviewedAt=(string)v[8],Algorithm=(string)v[9],AlgorithmVersion=Convert.ToInt32(v[10]),Digest=(string)v[11],Sampling=(string)v[12],PreviewState=(string)v[13],PreviewError=(string)v[14],TextReadOnly=reviewer.ReadOnly || notes.ReadOnly,LocationCount=(long)v[16]};
+            return new InspectorData {GroupId=group,ContentId=(long)v[0],Sequence=(long)v[1],Size=(long)v[2],ReviewRevision=(long)v[3],RootPath=(string)v[4],Status=(string)v[5],Reviewer=reviewer.Text,Notes=notes.Text,ReviewedAt=(string)v[8],Algorithm=(string)v[9],AlgorithmVersion=Convert.ToInt32(v[10]),Digest=(string)v[11],Sampling=(string)v[12],PreviewState=(string)v[13],PreviewError=(string)v[14],TextReadOnly=reviewer.ReadOnly || notes.ReadOnly,StegoNotes=StegoFindings.InspectorNote(db,group,(long)v[0],notes.Text),LocationCount=(long)v[16]};
         }
         internal static LocationPage Locations(SqliteConnection db,long group,string after,int limit) {
             db.Execute("BEGIN");try{
