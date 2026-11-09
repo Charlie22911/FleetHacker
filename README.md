@@ -4,10 +4,12 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 ## Downloads
 
-- [Download for Windows (.exe)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.exe)
-- [Download the offline browser preview (.html)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
+I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-The [release page](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.23-preview) includes both source archives. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/windows-preview-2026-11-09/FleetHacker-Windows-Preview-2026-11-09.zip)
+- [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
+
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/windows-preview-2026-11-09) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -15,11 +17,13 @@ Thanks to Jeremy Gerdes and the Phoenix LAI contributors for their work on local
 
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the database and manual review tools. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
 
-Open the downloaded HTML directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own database format and opens Windows portable backups read-only. Use the Windows build for AI draft review and access to Evidence stored in Windows databases. [Browser usage and build instructions](browser/README.md)
+The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own database format and opens Windows portable backups read-only. Use the Windows build for AI draft review and access to Evidence stored in Windows databases. [Browser usage and build instructions](browser/README.md)
 
 ## Optional hidden data analysis
 
 An optional Windows [hidden data analysis package](steganography/README.md) checks unchecked photos throughout the database with Aletheia color models, zsteg and native Binwalk. Suspect photos appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
+
+The current preview flags unconfirmed indicators as well as validated payloads. Review each finding before making a compliance decision. Long notes can expand the Inspect controls.
 
 ## Download Gemma for advanced AI review
 
