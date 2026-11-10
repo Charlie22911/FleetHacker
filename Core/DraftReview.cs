@@ -69,7 +69,8 @@ namespace MediaReviewer {
                     AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+ReviewExtensions+@") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))))";
             string motionGroup=@"(SELECT MIN(g.id) FROM review_groups g WHERE g.content_id=p.content_id AND g.retired=0 AND g.status='TO_REVIEW'
                 AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+MotionExtensions+@") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0))))";
-            progress(0,-1,"items examined");
+            long total=(long)reader.Scalar("SELECT COUNT(*) FROM previews p WHERE "+eligible,0,ceiling,model);
+            progress(0,total,"items examined");
             using(var decoder=new DecoderHost(Native.RuntimeDirectory)){
                 while(true){
                     token.ThrowIfCancellationRequested();
@@ -81,9 +82,9 @@ namespace MediaReviewer {
                         foreach(var row in rows){
                             token.ThrowIfCancellationRequested();cursor=(long)row[0];
                             bool motion=row[3]!=null;
-                            if(motion)progress(examined,-1,"items examined · sampling motion frames");
+                            if(motion)progress(examined,total,"items examined · sampling motion frames");
                             double? score=motion ? ScoreMotion(reader,decoder,classifier,(long)row[3],cursor,token) : ScoreFrame(classifier,(byte[])row[2],token);
-                            progress(++examined,-1,"items examined"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : ""));
+                            progress(++examined,total,"items examined"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : ""));
                             if(!score.HasValue){if(motion)motionSkipped++;else skipped++;continue;}
                             batch.Add(new ScoreRecord {Content=cursor,Revision=(long)row[1],Score=score.Value});
                         }
@@ -93,9 +94,13 @@ namespace MediaReviewer {
                     }
                 }
             }
-            return "AI draft check complete"+(gemma && !String.IsNullOrEmpty(classifier.Device) ? " · "+classifier.Device : "")+
-                ". "+scored.ToString("N0")+" new scores saved, "+skipped.ToString("N0")+" unreadable still previews and "+
-                motionSkipped.ToString("N0")+" unavailable or unreadable motion items skipped. Open AI suggestions to review the flagged items.";
+            long remaining=(long)reader.Scalar("SELECT COUNT(*) FROM previews p WHERE "+eligible,0,ceiling,model);
+            long noPreview=(long)reader.Scalar(@"SELECT COUNT(*) FROM (SELECT DISTINCT g.content_id FROM review_groups g WHERE g.retired=0 AND g.status='TO_REVIEW' AND EXISTS(SELECT 1 FROM group_occurrences o WHERE o.group_id=g.id AND o.extension IN("+ReviewExtensions+@") AND (o.superseded=0 OR NOT EXISTS(SELECT 1 FROM group_occurrences live WHERE live.group_id=g.id AND live.superseded=0)))) g LEFT JOIN previews p ON p.content_id=g.content_id WHERE p.content_id IS NULL OR p.state<>'available' OR p.bytes IS NULL OR length(p.bytes) NOT BETWEEN 1 AND 32768");
+            string summary="AI draft check "+(remaining>0 || noPreview>0 || skipped>0 || motionSkipped>0 ? "finished with unscored items" : "complete")+
+                ". "+scored.ToString("N0")+" new scores saved. "+remaining.ToString("N0")+" eligible items still lack a current AI score. "+
+                noPreview.ToString("N0")+" unreviewed items have no usable preview and could not be checked. "+skipped.ToString("N0")+" still items and "+motionSkipped.ToString("N0")+" motion items could not be scored."+
+                (gemma && !String.IsNullOrEmpty(classifier.Device) ? " Device: "+classifier.Device+"." : "")+" Open AI suggestions to review the flagged items.";
+            engine.WaitWrite(db=>{Catalog.Log(db,"info","AI draft summary","",summary);return null;},4096);return summary;
         }
 
         static double? ScoreFrame(IDraftClassifier classifier,byte[] bytes,CancellationToken token){

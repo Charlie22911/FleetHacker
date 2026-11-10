@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$Executable,[ValidateSet('selection','gallery','pagination','preview','archive')][string[]]$Checks=@('selection','gallery','pagination','preview','archive'))
+param([Parameter(Mandatory)][string]$Executable,[ValidateSet('selection','gallery','pagination','preview','archive','status')][string[]]$Checks=@('selection','gallery','pagination','preview','archive','status'))
 $ErrorActionPreference='Stop'
 $executablePath=(Resolve-Path -LiteralPath $Executable).Path
 foreach($check in $Checks){

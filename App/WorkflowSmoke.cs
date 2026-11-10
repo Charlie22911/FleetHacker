@@ -17,20 +17,46 @@ namespace MediaReviewer {
         static void Check(bool value,string message){if(!value)throw new Exception(message);}
         static void Wait(Func<bool> condition){var watch=Stopwatch.StartNew();while(!condition()){if(watch.Elapsed.TotalSeconds>25)throw new Exception("Workflow condition timed out");var frame=new DispatcherFrame();Dispatcher.CurrentDispatcher.BeginInvoke(DispatcherPriority.Background,new Action(()=>frame.Continue=false));Dispatcher.PushFrame(frame);Thread.Sleep(10);}}
         static void Image(string path,byte red){int width=1200,height=800;var pixels=new byte[width*height*3];for(int y=0;y<height;y++)for(int x=0;x<width;x++){int i=(y*width+x)*3;pixels[i]=(byte)(x%251);pixels[i+1]=(byte)(y%251);pixels[i+2]=red;}var bitmap=BitmapSource.Create(width,height,96,96,PixelFormats.Rgb24,null,pixels,width*3);var encoder=new PngBitmapEncoder();encoder.Frames.Add(BitmapFrame.Create(bitmap));using(var file=File.Create(path))encoder.Save(file);}
+        sealed class StatusClassifier:IDraftClassifier {
+            public string Device {get{return "Generated CPU";}}
+            public double? Score(byte[] preview,CancellationToken token){token.ThrowIfCancellationRequested();return .6;}
+            public void Dispose(){}
+        }
+        static void CheckStatus(ReviewerWindow controller,string database,string directory){
+            using(var db=new SqliteConnection(database,true)){
+                string summary=(string)db.Scalar("SELECT message FROM diagnostics WHERE stage='Scan summary' ORDER BY id DESC LIMIT 1");
+                Check(summary.Contains("7 files fingerprinted") && summary.Contains("1 skipped") && summary.Contains("1 preview failed") && summary.Contains("0 file read failures"),"Completion must distinguish unreadable previews from failed fingerprinting: "+summary);
+                string id=(string)db.Scalar("SELECT id FROM scans ORDER BY rowid DESC LIMIT 1");Check(Catalog.ScanStateSummary(db,id,"running").StartsWith("Scan in progress.") && !Catalog.ScanStateSummary(db,id,"running").Contains("stopped"),"Active scans must not be reported as stopped.");
+                Check(Catalog.FinishedFileJobs(new object[][]{new object[]{"file","complete",99L},new object[]{"file","failed",1L},new object[]{"file","skipped",2L},new object[]{"file","pending",5L},new object[]{"preview","complete",700L}})==102,"File jobs finished must include failed and skipped jobs, excluding pending/preview work.");
+
+            }
+            var window=controller.Window;Check(((Button)window.FindName("PreviousButton")).Content.ToString()=="← Previous" && ((Button)window.FindName("NextButton")).Content.ToString()=="Next →","Pagination must use Previous and Next labels.");
+            var engine=Field<ReviewerEngine>(controller,"engine");using(var release=new ManualResetEventSlim(false)){
+                string operation=engine.EnqueueOperation("AI draft check",(db,token,progress)=>{Thread.Sleep(220);progress(414,-1,"items examined · Vulkan GPU - generated device");while(!release.Wait(20))token.ThrowIfCancellationRequested();return "Generated check finished";});
+                controller.GetType().GetField("draftTask",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(controller,operation);((TextBlock)window.FindName("MessageText")).Text="Gemma draft check queued…";
+                try{Wait(()=>((TextBlock)window.FindName("ActivityText")).Text.Contains("generated device"));Check(((TextBlock)window.FindName("MessageText")).Text.Contains("check running"),"Running work must not continue to say queued");string caption=((TextBlock)window.FindName("ActivityText")).Text;Check(caption==engine.GetOperationProgress(operation).Stage,"Operation progress must appear once: "+caption);var shot=new RenderTargetBitmap((int)window.ActualWidth,(int)window.ActualHeight,96,96,PixelFormats.Pbgra32);shot.Render(window);var encoded=new PngBitmapEncoder();encoded.Frames.Add(BitmapFrame.Create(shot));using(var output=File.Create(Path.Combine(directory,"status-window.png")))encoded.Save(output);}
+                finally{release.Set();Wait(()=>engine.GetOperationProgress(operation).State!="running" && engine.GetOperationProgress(operation).State!="queued");controller.GetType().GetField("draftTask",BindingFlags.Instance|BindingFlags.NonPublic).SetValue(controller,null);}
+                string draft=engine.RequestDraftReview(()=>new StatusClassifier());Wait(()=>!engine.DraftReviewActive);
+                var completion=engine.GetOperationProgress(draft);Check(completion.State=="complete" && completion.Total==6 && completion.Completed==6,"AI progress needs the eligible total and examined count.");
+                using(var db=new SqliteConnection(database,true)){string summary=(string)db.Scalar("SELECT message FROM diagnostics WHERE stage='AI draft summary' ORDER BY id DESC LIMIT 1");Check(summary.Contains("6 new scores saved") && summary.Contains("0 eligible items still lack") && summary.Contains("1 unreviewed items have no usable preview"),"AI completion must disclose scored and uncheckable items: "+summary);}
+            }
+        }
         internal static int Run(string directory,string mode){
             Directory.CreateDirectory(directory);string root=Directory.CreateDirectory(Path.Combine(directory,"images")).FullName;
-            int total=mode=="pagination" ? 22 : 6;
-            for(int i=0;i<total;i++)Image(Path.Combine(root,i+".png"),(byte)(i*40));
+            int imageTotal=mode=="pagination" ? 22 : 6;int total=imageTotal+(mode=="status" ? 1 : 0);
+            for(int i=0;i<imageTotal;i++)Image(Path.Combine(root,i+".png"),(byte)(i*40));
+            if(mode=="status"){File.WriteAllText(Path.Combine(root,"unsupported.svg"),"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"></svg>");File.WriteAllText(Path.Combine(root,"not-media.txt"),"Generated non-media document");}
             string database=Path.Combine(directory,"workflow.sqlite");
-            using(var engine=ReviewerEngine.Open(database,true)){Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1});Wait(()=>engine.Status.ScanId==scan&&!engine.Status.RunningScan);}
+            using(var engine=ReviewerEngine.Open(database,true)){Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);string scan=engine.StartScan(new ScanOptions {RootPath=root,WorkerCount=1,Extensions=mode=="status" ? Formats.Deep : Formats.Quick});Wait(()=>engine.Status.ScanId==scan&&!engine.Status.RunningScan);}
             var app=new Application {ShutdownMode=ShutdownMode.OnExplicitShutdown};
             using(var controller=new ReviewerWindow(Program.ReadWindow(),false)){
                 var window=controller.Window;window.Width=1400;window.Height=900;controller.Open(database,false);window.Show();
                 var cards=Field<ObservableCollection<CardItem>>(controller,"cards");Wait(()=>cards.Count==total&&cards[0].Image!=null);
                 Wait(()=>((Button)window.FindName("SteganographyButton")).Visibility==Visibility.Visible);
                 Check(!Field<StegoPackageInfo>(controller,"stegoPackage").FullCoverage,"Incomplete engine coverage must remain explicit");
+                if(mode=="status")CheckStatus(controller,database,directory);
                 cards[0].IsSelected=true;
-                if(mode=="selection" || mode=="gallery"){
+                if(mode=="status"){}else if(mode=="selection" || mode=="gallery"){
                     if(mode=="gallery")((Button)window.FindName("ThumbnailsModeButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     var first=cards[0];var next=cards[1];((Button)window.FindName("CompliantButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Wait(()=>!cards.Contains(first)&&((TextBlock)window.FindName("MessageText")).Text=="Review saved.");

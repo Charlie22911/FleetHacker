@@ -27,6 +27,7 @@ Automatic classification defaults to 90%. Verified embedded ZIP payloads qualify
 
 Images hidden directly in pixel bits can remain saved leads, so an empty Steganography bucket does not establish that hidden data is absent. Review findings before making a compliance decision.
 
+Media scan completion reports fingerprinted and skipped files, file-read and folder/archive failures, preview failures, and pending jobs separately. A preview failure can leave a file indexed with its full fingerprint while preventing image display or AI review. The AI draft check has its own progress total and completion summary; it reports remaining eligible items and items without usable previews. The number of items in a review bucket is not the AI task total.
 ## Download Gemma for advanced AI review
 
 **Advanced AI review with Gemma 4 E2B requires both files below.** Download them separately and place them in the same folder as the FleetHacker executable on a local drive. Keep the original filenames. The pair is about 3.4 GB and FleetHacker checks both files when it loads the model.

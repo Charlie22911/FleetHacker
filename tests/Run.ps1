@@ -29,6 +29,7 @@ try{
     Suite 'Smoke' {& "$PSScriptRoot/Smoke.ps1" -Executable $script:app -PreviewFixtures $PreviewFixtures -HtmlFixture $HtmlFixture -PlaybackFixtures $PlaybackFixtures -DraftModel $DraftModel} $desktopMissing
     Suite 'Workflow' {& "$PSScriptRoot/Workflow.ps1" -Executable $script:app} $desktopMissing
     Suite 'Gallery' {AppCheck '--verify-gallery'} $desktopMissing
+    Suite 'PreviewMemory' {AppCheck '--verify-preview-memory'} $desktopMissing
     Suite 'Companion' {& "$PSScriptRoot/Companion.ps1" -Executable $script:app} $companionMissing
     Suite 'StegoScan' {& "$PSScriptRoot/StegoScan.ps1" -Executable $script:app} $desktopMissing
     $payloadMissing=if($companionMissing){$companionMissing}elseif(!$SteganographyFixture){'Supply generated payload fixtures with SteganographyFixture.'}elseif(!(Test-Path -LiteralPath $SteganographyFixture)){'The steganography fixture path does not exist.'}else{''}

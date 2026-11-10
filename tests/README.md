@@ -18,7 +18,7 @@ After building the complete portable executable, run the release checks on a Win
   -PlaybackFixtures 'C:\fixtures\playback'
 ```
 
-The entry point includes identity-integrity, Smoke, Workflow, Companion, StegoScan, generated-payload Steganography, VideoPlayback, gallery, review UI, confidence policy, identity/migration/reconnect integrity, and failure-recovery checks. Supply the fixtures and optional model needed for the features being checked. VideoPlayback expects a generated 320 × 180 video lasting at least five seconds. Use `-PreviewFixtures`, `-HtmlFixture`, and `-DraftModel` for the corresponding optional Smoke checks. Use `-NonInteractive` to skip checks that require a Windows desktop.
+The entry point includes identity-integrity, Smoke, Workflow, Companion, StegoScan, generated-payload Steganography, VideoPlayback, gallery, repeated TIFF previews, review UI, confidence policy, identity/migration/reconnect integrity, and failure-recovery checks. Supply the fixtures and optional model needed for the features being checked. VideoPlayback expects a generated 320 × 180 video lasting at least five seconds. Use `-PreviewFixtures`, `-HtmlFixture`, and `-DraftModel` for the corresponding optional Smoke checks. Use `-NonInteractive` to skip checks that require a Windows desktop.
 
 Each unavailable prerequisite is reported as `SKIP`, with its reason. Skipped checks are not counted as passes. A failing suite stops the run and remains recorded in `.build/regression-*/results.json`. Native linking and the complete interactive suite remain release checks; the managed CI job does not replace them.
 
@@ -31,3 +31,9 @@ A complete build creates `.build/diagnostic-symbols.zip` separately from the por
 ```
 
 The native host passes this optional symbol file to the CLR together with its embedded managed bytes. The check requires a source filename and line number from an actual exception. Symbols from another build are not interchangeable. The portable application runs without this separate diagnostic file.
+
+Repeated-preview coverage uses generated high-bit-depth TIFFs in the private decoder worker and checks the existing memory and source-size limits. Run the linked executable with
+
+`--verify-preview-memory <scratch-directory> [existing-TIFF-path]`
+
+The optional existing TIFF is read without modification.

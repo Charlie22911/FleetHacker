@@ -51,7 +51,7 @@ namespace MediaReviewer {
         object Write(Func<SqliteConnection,object> body,long bytes=1024) { return engine.WaitWrite(body,bytes); }
         string Full(string relative) { return String.IsNullOrEmpty(relative) ? options.RootPath : Catalog.PreviewSourcePath(options.RootPath,relative); }
         void Run() {
-            bool completed=false,withErrors=false,manifestStarted=false; string failure=null;
+            bool completed=false,withErrors=false,manifestStarted=false; string failure=null;string completionSummary=null;
             try {
                 if(resume) {
                     object[] row=(object[])Write(db=> {
@@ -126,14 +126,14 @@ namespace MediaReviewer {
                                     db.Execute("UPDATE scans SET state=?,completed_at=? WHERE id=?",completed ? (withErrors ? "complete_errors" : "complete") : failure==null ? "cancelled" : "failed",completed ? Catalog.Now() : null,id);
                                 }
                                 Catalog.Log(db,failure==null ? "info" : "error","Scan summary",options==null ? "" : options.RootPath,
-                                    completed ? "Scan completed"+(withErrors ? " with errors" : " cleanly") : failure ?? "Scan cancelled; committed results and pending jobs are retained");
+                                    completionSummary=Catalog.ScanCompletionSummary(db,id,completed,failure));
                             });
                             return null;
                         }); Refresh();
                     } catch(Exception error) { if(failure==null) failure=error.Message; }
                 }
                 finished=true;
-                engine.Update(s=>{s.RunningScan=false;s.CompletedWithErrors=withErrors;if(!engine.Faulted)s.Error=failure??s.Error;s.ResumeId=completed ? "" : id;s.PreparedQueueCount=0;s.RetainedBytes=0;s.Stage=engine.Faulted ? "Database stopped; scan interrupted" : completed ? (withErrors ? "Completed with errors" : "Completed") : failure==null ? "Cancelled; resume is available" : "Scan stopped: "+failure;});
+                engine.Update(s=>{s.RunningScan=false;s.CompletedWithErrors=withErrors;if(!engine.Faulted)s.Error=failure??s.Error;s.ResumeId=completed ? "" : id;s.PreparedQueueCount=0;s.RetainedBytes=0;s.Stage=engine.Faulted ? "Database stopped; scan interrupted" : completionSummary ?? (completed ? (withErrors ? "Completed with errors" : "Completed") : failure==null ? "Cancelled; resume is available" : "Scan stopped: "+failure);});
             }
         }
         void Manifest() {
@@ -303,9 +303,9 @@ namespace MediaReviewer {
         void Refresh() {
             if(engine.Faulted) return;
             var counts=(List<object[]>)Write(db=>db.Query("SELECT kind,state,total FROM scan_counters WHERE scan_id=?",new object[]{id},30));
-            long discovered=0,done=0,failed=0,pending=0;
-            foreach(object[] row in counts) { if((string)row[0]=="file") { discovered+=(long)row[2]; if((string)row[1]=="complete" || options.SniffRenamed && (string)row[1]=="skipped") done+=(long)row[2]; } if((string)row[1]=="failed") failed+=(long)row[2]; if((string)row[1]=="pending" || (string)row[1]=="processing") pending+=(long)row[2]; }
-            engine.Update(s=>{s.DiscoveredFiles=discovered;s.ProcessedFiles=done;s.FailedFiles=failed;s.PendingWork=pending;s.RetainedBytes=prepared.Bytes;s.PreparedQueueCount=prepared.Count;});
+            long discovered=0,done=Catalog.FinishedFileJobs(counts),failed=0,pending=0,previewFailures=0,readFailures=0,listingFailures=0,skipped=0;
+            foreach(object[] row in counts) { if((string)row[0]=="file") { discovered+=(long)row[2];  } if((string)row[1]=="failed"){failed+=(long)row[2];if((string)row[0]=="preview")previewFailures+=(long)row[2];else if((string)row[0]=="file")readFailures+=(long)row[2];else listingFailures+=(long)row[2];}if((string)row[0]=="file" && (string)row[1]=="skipped")skipped+=(long)row[2]; if((string)row[1]=="pending" || (string)row[1]=="processing") pending+=(long)row[2]; }
+            engine.Update(s=>{s.DiscoveredFiles=discovered;s.ProcessedFiles=done;s.FailedFiles=failed;s.PreviewFailures=previewFailures;s.ReadFailures=readFailures;s.ListingFailures=listingFailures;s.SkippedFiles=skipped;s.PendingWork=pending;s.RetainedBytes=prepared.Bytes;s.PreparedQueueCount=prepared.Count;});
         }
     }
     public sealed partial class ReviewerEngine {

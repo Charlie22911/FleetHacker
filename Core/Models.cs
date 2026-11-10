@@ -77,6 +77,7 @@ namespace MediaReviewer {
     public sealed class StatusSnapshot {
         public string Stage="Opening database",Error="",ScanId="",User="",ResumeId="";
         public bool RunningScan,CancelRequested,CompletedWithErrors,BusyOperation;
+        public long PreviewFailures,ReadFailures,ListingFailures,SkippedFiles;
         public long DiscoveredFiles,ProcessedFiles,FailedFiles,BytesRead,PublishedGroups,Revision,WalBytes,PendingWork;
         public int CompletedUsers,TotalUsers,QueueCount,PreparedQueueCount; public long RetainedBytes;
         public DateTime LastCommitUtc,LastProgressUtc;

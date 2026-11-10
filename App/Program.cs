@@ -48,7 +48,7 @@ namespace MediaReviewer {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
             if(mode=="--verify-symbols" && args.Length==1){try{ManagedSmoke.VerifySymbols();Console.WriteLine("Matching native-host symbols include source lines.");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
-            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-stego-policy" || mode=="--verify-review-ui" || mode=="--verify-reliability" || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
+            bool headless=CommandLine.IsHeadless(args) || mode=="--verify-stego-policy" || mode=="--verify-review-ui" || mode=="--verify-preview-memory" || mode=="--verify-reliability" || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
@@ -60,6 +60,7 @@ namespace MediaReviewer {
                 MediaScratch.QueueRecovery();
                 if(mode=="--verify-reliability" && args.Length==2)return ReliabilitySmoke.Run(args[1]);
                 if(mode=="--verify-stego-policy" && args.Length==2)return StegoPolicySmoke.Run(args[1]);
+                if(mode=="--verify-preview-memory" && (args.Length==2 || args.Length==3))return PreviewMemorySmoke.Run(args[1],args.Length==3 ? args[2] : null);
                 if(mode=="--verify-review-ui" && args.Length==2)return ReviewUiSmoke.Run(args[1]);
                 if(mode=="--verify-stego-notes" && args.Length==2)return StegoQueueSmoke.NotesRun(args[1]);
                 if(mode=="--verify-stego-interface" && args.Length==2)return StegoQueueSmoke.InterfaceRun(args[1]);

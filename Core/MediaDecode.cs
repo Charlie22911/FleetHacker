@@ -142,7 +142,9 @@ namespace MediaReviewer {
             }catch(NotSupportedException){}catch(ArgumentException){}
             BitmapSource image=frame;
             int bound=InspectionPlan.BoundSide(width,height,side);
-            if(scaledDecoder && bound<Math.Max(width,height)) {
+            // Load bounded TIFF pixels before JPEG encoding; transforming a lazy TIFF
+            // frame at Save can retain full-resolution WIC buffers across requests.
+            if((scaledDecoder || type=="tiff") && bound<Math.Max(width,height)) {
                 stream.Position=0;
                 var bitmap=new BitmapImage();bitmap.BeginInit();bitmap.CacheOption=BitmapCacheOption.OnLoad;
                 if(width>=height)bitmap.DecodePixelWidth=bound;else bitmap.DecodePixelHeight=bound;

@@ -487,8 +487,8 @@ namespace MediaReviewer {
             TickStegoPackage();
             if(engine==null)return;
             status=engine.Status;
-            Text("ActivityText",status.RunningScan ? String.Format("{0} · user {1}/{2} · {3:N0}/{4:N0} files processed · {5:N0} errors · {6:N0} queued · WAL {7:N1} MiB",
-                status.Stage,status.CompletedUsers,status.TotalUsers,status.ProcessedFiles,status.DiscoveredFiles,status.FailedFiles,status.QueueCount,status.WalBytes/1048576.0) : status.Stage);
+            Text("ActivityText",status.RunningScan ? String.Format("{0} · user {1}/{2} · {3:N0}/{4:N0} file jobs finished · {5:N0} read/listing failures · {8:N0} preview failures · {6:N0} queued · WAL {7:N1} MiB",
+                status.Stage,status.CompletedUsers,status.TotalUsers,status.ProcessedFiles,status.DiscoveredFiles,status.ReadFailures+status.ListingFailures,status.QueueCount,status.WalBytes/1048576.0,status.PreviewFailures) : status.Stage);
             if(engine.Faulted && engine.DetectedHtml && pending.Count==0){OfferImport();return;}
             if(engine.Faulted && !String.IsNullOrEmpty(status.Error))Message(status.Error);
             UiResult result;
@@ -516,7 +516,7 @@ namespace MediaReviewer {
             }
             string activeOperation=stegoTask??draftTask??task;
             var progress=activeOperation==null ? null : engine.GetOperationProgress(activeOperation);
-            if(progress!=null)Text("ActivityText",progress.Stage+" · "+progress.Completed.ToString("N0")+(progress.Total.HasValue ? " / "+progress.Total.Value.ToString("N0") : "")+" "+progress.Unit);
+            if(progress!=null){Text("ActivityText",progress.Stage);if(draftTask!=null && progress.State=="running" && (Get<TextBlock>("MessageText").Text=="Gemma draft check queued…" || Get<TextBlock>("MessageText").Text=="Marqo draft check queued…"))Message("AI draft check running. Completed checks are saved.");}
             var bar=Get<ProgressBar>("ActivityProgress");
             if(status.RunningScan){
                 bar.Visibility=Visibility.Visible;

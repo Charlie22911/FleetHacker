@@ -72,9 +72,12 @@ namespace MediaReviewer {
         public string RequestLog() {
             if(!Ready || closing) throw new InvalidOperationException("Open a database first"); string id=Guid.NewGuid().ToString("N");
             var work=new DbWork { Body=db=> {
-                var text=new StringBuilder(); text.AppendLine("Media Compliance Reviewer for Windows "+Product.Version+" — recent log"); text.AppendLine("Log may contain source names and paths.");
+                var text=new StringBuilder(); text.AppendLine("Media Compliance Reviewer for Windows "+Product.DotNetVersion+" — recent log"); text.AppendLine("Log may contain source names and paths.");
                 text.AppendLine("Access denied: Windows refused the read/list request. Local administrator elevation does not grant remote share or NTFS permissions. File encryption can also restrict reads. The scan does not change source permissions.");
                 text.AppendLine("Unrecognized media header: the extension alone does not establish the file type. Fingerprints remain saved when preview generation fails. Earlier log entries retain their original diagnostic detail.");text.AppendLine();
+                var recent=db.Query("SELECT id,state,completed_at FROM scans ORDER BY rowid DESC LIMIT 1",new object[0],1);
+                if(recent.Count>0){var scan=recent[0];text.AppendLine("Latest media scan: "+scan[1]+" · "+scan[2]);text.AppendLine(Catalog.ScanStateSummary(db,(string)scan[0],(string)scan[1]));text.AppendLine();}
+                text.AppendLine("AI checks use saved previews. Media scan completion does not mean every item received an AI score.");text.AppendLine();
                 foreach(object[] row in db.Query("SELECT at,level,stage,path,message FROM diagnostics ORDER BY id DESC LIMIT 500",new object[0],500)) { string line=row[0]+" ["+row[1]+"] "+row[2]+" | "+row[3]+" | "+row[4]; if(text.Length+line.Length>262144){text.AppendLine("Display is bounded; additional log details remain in the database.");break;} text.AppendLine(line); } return text.ToString();
             },Done=value=>Respond(new UiResult { RequestId=id,Kind="Log",Success=true,Value=(string)value }),Failed=error=>Respond(new UiResult { RequestId=id,Kind="Log",Error=error.Message }) };
             if(!reads.TryAdd(work,1024)) throw new InvalidOperationException("Reader queue is busy"); return id;
