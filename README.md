@@ -6,10 +6,10 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/windows-preview-2026-11-09/FleetHacker-Windows-Preview-2026-11-09.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.24-preview/FleetHacker-Windows-0.3.24-Preview.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/windows-preview-2026-11-09) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.24-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -23,7 +23,9 @@ The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. 
 
 An optional Windows [hidden data analysis package](steganography/README.md) checks all unchecked photos or a selected set with Aletheia color models, zsteg and native Binwalk. High-confidence findings appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
 
-Automatic classification defaults to 90%. Verified embedded files qualify directly. Statistical and weak findings remain saved leads while reliable model confidence is unavailable; the current model outputs are not calibrated confidence percentages. Review findings before making a compliance decision.
+Automatic classification defaults to 90%. Verified embedded ZIP payloads qualify directly. Current statistical and weak findings remain saved leads at every setting because model outputs are not calibrated confidence percentages.
+
+Images hidden directly in pixel bits can remain saved leads, so an empty Steganography bucket does not establish that hidden data is absent. Review findings before making a compliance decision.
 
 ## Download Gemma for advanced AI review
 
@@ -36,7 +38,7 @@ Automatic classification defaults to 90%. Verified embedded files qualify direct
 
 1. At startup or in the sidebar, choose **Open or create database**. Select an existing SQLite database to open it, or enter a new filename on a local drive to create one. Choose **Later** to skip the startup prompt. When opening a final HTML database, choose a new local filename for the Windows copy.
 2. Enter a local folder, mapped drive or UNC media share under **Source root**. In **Maintenance**, use **Use current source path as default** to save it in the database. You can temporarily enter a different path on another machine. Use **Reconnect all sources** to verify a replacement root for previously recorded locations.
-3. Start or resume a scan, then choose a review queue from the sidebar or compact **View** dropdown. New databases scan root-level media and check headers on ordinary files with unknown extensions by default. Change either setting under **Options**. New scans and resumed scans use complete SHA-256 fingerprints. Saved database preferences and resumed scan settings are preserved.
+3. Start or resume a scan, then choose a review queue from the sidebar or compact **View** dropdown. New databases scan root-level media and check headers on ordinary files with unknown extensions by default. Change either setting under **Options**. New scans and resumed scans use complete SHA-256 fingerprints. Quick and Deep choose media types; both use full-file hashing. Saved database preferences and resumed scan settings are preserved.
 4. Click a List column to sort the current queue or choose **Thumbnails** for an adjustable grid. Double-click an item to open **Inspect / video** without changing the gallery view. Choose **Quick Review** in the sidebar to review one item at a time. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. A cue appears during a drag when the gesture is ready. Quick Review advances when the decision is saved. Press **C** or **N** outside an editor for the corresponding decision in any view.
 5. Use **Details / notes** or **Inspect** to open an item while scanning. Scroll over a photo to zoom and drag to pan when zoomed. In **Inspect / video** and **Quick Review**, move the pointer over the media to reveal playback controls. You can play, pause, stop, seek, skip ten seconds, change volume, mute, or cycle speed from 1× to 2×. Click the video or press **Space** with the preview focused to play or pause. Playback starts on demand. Windows-supported videos prepare in a paused state after selection. Inspect and Quick Review keep the saved poster visible until playback starts and show a message when there is no poster. Stop playback or leave the item to release the source file. Use the vault to retain originals and capture Evidence.
 
