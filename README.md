@@ -6,10 +6,10 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.24-preview/FleetHacker-Windows-0.3.24-Preview.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.29-preview/FleetHacker-Windows-0.3.29-Preview.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.24-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.29-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -23,9 +23,9 @@ The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. 
 
 An optional Windows [hidden data analysis package](steganography/README.md) checks all unchecked photos or a selected set with Aletheia color models, zsteg and native Binwalk. High-confidence findings appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
 
-Automatic classification defaults to 90%. Verified embedded ZIP payloads qualify directly. Current statistical and weak findings remain saved leads at every setting because model outputs are not calibrated confidence percentages.
+Automatic classification defaults to 90%. Recovered ZIP archives and PNG/JPEG files that pass structural validation qualify directly. Image validation checks complete boundaries and decoding; PNG also checks chunk CRCs. Current statistical and weak findings remain saved leads at every setting because model outputs are not calibrated confidence percentages.
 
-Images hidden directly in pixel bits can remain saved leads, so an empty Steganography bucket does not establish that hidden data is absent. Review findings before making a compliance decision.
+Images hidden directly in pixel bits without a recoverable file header can remain saved leads, so an empty Steganography bucket does not establish that hidden data is absent. Ordinary embedded camera thumbnails are not automatically treated as hidden images. Review findings before making a compliance decision.
 
 Media scan completion reports fingerprinted and skipped files, file-read and folder/archive failures, preview failures, and pending jobs separately. A preview failure can leave a file indexed with its full fingerprint while preventing image display or AI review. The AI draft check has its own progress total and completion summary; it reports remaining eligible items and items without usable previews. The number of items in a review bucket is not the AI task total.
 ## Download Gemma for advanced AI review
@@ -80,14 +80,27 @@ This is an unsigned development preview. Use a copy of an existing database for 
 ## AI draft check
 
 1. For advanced review, [download both Gemma files](#download-gemma-for-advanced-ai-review). Gemma requires a CPU with AVX2, FMA and F16C and uses more time and memory than Marqo. For Marqo, place `Marqo-NSFW-384.onnx` beside the executable on a local fixed drive.
-2. Finish or pause your scan, then choose **AI draft check**. Select a model and threshold and choose **Save and run**. **Save settings** updates the queue from scores already saved. Each model has its own scores and threshold. The database remembers your selection, with Marqo as the default when the Gemma pair is unavailable.
+2. Finish or pause your scan, then choose **AI draft check**. Select a model, choose what to flag, and choose **Save and run**. **Save settings** updates the queue from scores already saved. The database remembers each model's settings, with Marqo as the default when the Gemma pair is unavailable.
 3. Open **AI suggestions** to inspect flagged items, with the highest scores first by default. Use the usual Compliant or Non-compliant controls to make a decision. A saved decision clears the suggestion. The regular **To be reviewed** queue includes all items awaiting a human decision.
 
-Marqo defaults to 7% for databases without a saved threshold. Raise it to narrow the review queue. Gemma assigns a workplace review priority. Its 55% default includes ordinary swimwear. Raise it to 80% to focus on visible or implied nudity, including artistic nudity, sexualized lingerie, and uncertain cases. Gemma priorities are policy tiers. Treat the suggestions as leads for human review.
+Gemma offers named presets instead of a continuous slider:
 
-Choose **Edit Gemma search criteria** under **AI draft check** to define what Gemma should look for. Keep categories A through E and edit their descriptions. Their fixed priority scores are A 97%, B 90%, C 55%, D 8%, and E 82%. Choose **Apply** and then **Save and run** to score the saved previews using the new criteria. The rubric is saved per database. **Reset to default** restores the original workplace rubric and reuses any matching default scores. Human decisions and Marqo scores are preserved.
+| Preset | What it flags |
+| --- | --- |
+| **More suggestions** (default) | Nudity, sexualized posing (including swimwear), and unclear images with concerning visible details. |
+| **Fewer suggestions** | Nudity and sexualized underwear posing. |
+| **Nudity only** | Visible or clearly implied nudity, including artistic nudity. |
+| **Custom** | The content you describe in **Find**, excluding matches to **Ignore**. |
 
-Gemma loads in the background after you open a database on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the database’s saved rubric and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Select **CPU only** under **Gemma processing device** to skip GPU probing. The database remembers this choice and reuses saved scores across both modes. GPU mode uses the existing Windows graphics driver and remains offline.
+Ordinary family, beach, pool and sports photos, including nonsexualized swimwear, remain benign under the built-in presets. Blur or an obscured chest alone does not justify a flag. Gemma's displayed priorities are review categories, not confidence percentages.
+
+For **Custom**, enter a concrete description in **Find**, such as `Firearms`, and optional exceptions in **Ignore**, such as `Toys and sports equipment`. Choose **?** for examples and prompting help. Ignore matches take priority. Photos and sampled frames are checked individually. Custom rules with exceptions can take longer to check. Rules are saved per database and remain available when you switch presets. Changing the rules requires new scores; unchanged rules can reuse matching saved scores. Human decisions and Marqo scores are preserved. Earlier advanced rules remain usable, and **Saved filter** retains an older filter that does not match a named preset until you choose another option.
+
+Marqo keeps its continuous slider and defaults to 7%. Lower values show more possible matches; higher values narrow the list. Changing its threshold reuses saved scores. Confirm suggestions yourself: either model can miss content or suggest an ordinary photo.
+
+Gemma reviews reduced copies capped at 256 pixels on the longest side, including saved image previews and sampled video and GIF frames. The original files are unchanged.
+
+Gemma loads in the background after you open a database on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the database's saved rules and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Expand **Processing options** and select **CPU only** to skip GPU probing. The database remembers this choice and reuses saved scores across both modes. GPU mode uses the existing Windows graphics driver and remains offline.
 
 The draft check runs locally in a private worker from the same executable. Still images use the saved database preview and can be scored with the source disconnected. The AI model makes no network requests.
 

@@ -54,9 +54,9 @@ namespace MediaReviewer {
         public List<MediaRow> Rows=new List<MediaRow>(); public long Total,Revision;
         public long AiTotal,StegoTotal;
         public int AiThreshold=DraftReview.DefaultMarqoThreshold;
-        public int MarqoThreshold=DraftReview.DefaultMarqoThreshold,GemmaThreshold=DraftReview.DefaultGemmaThreshold;
+        public int MarqoThreshold=DraftReview.DefaultMarqoThreshold,GemmaThreshold=DraftReview.DefaultGemmaThreshold,GemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;
         public bool GemmaCpuOnly;
-        public string GemmaCriteria="";
+        public string GemmaCriteria="",GemmaCustomCriteria="";
         public bool UseGemma;
         public long[] Totals=new long[4]; public int Page,PageSize;
     }

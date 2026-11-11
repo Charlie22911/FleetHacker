@@ -9,6 +9,7 @@ EXPORTS
     mcr_draft_close
     mcr_gemma_cpu_supported
     mcr_gemma_open
+    mcr_gemma_set_rules
     mcr_gemma_find_gpu
     mcr_gemma_score
     mcr_gemma_close

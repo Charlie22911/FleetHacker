@@ -16,7 +16,7 @@ namespace MediaReviewer {
             foreach(var f in ((IEnumerable)raw).Cast<object>().OfType<Dictionary<string,object>>()){
                 object kind,sha,engine;f.TryGetValue("kind",out kind);f.TryGetValue("engine",out engine);
                 if(kind as string=="validated_payload" && (engine as string=="zsteg" || engine as string=="binwalk") && f.TryGetValue("payloadSha256",out sha) && sha is string && ((string)sha).Length==64 && ((string)sha).All(Uri.IsHexDigit))
-                    return new StegoConfidenceDecision {Qualifies=true,EvidenceKind="verified",Reason="Embedded file structure and integrity were verified."};
+                    return new StegoConfidenceDecision {Qualifies=true,EvidenceKind="verified",Reason="An embedded file was recovered and its structure was validated."};
                 // Statistical qualification requires an independently evaluated calibration.
                 // No calibration is approved for the currently bundled partial color models.
                 // Raw model outputs and imported confidence claims must not enable this path.

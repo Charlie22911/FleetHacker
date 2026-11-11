@@ -143,6 +143,7 @@ namespace MediaReviewer {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CpuSupported();
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr FindGpu(byte[] error,UIntPtr errorLength);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate IntPtr OpenGemma(byte[] weights,byte[] projector,IntPtr gpu,byte[] criteria,byte[] error,UIntPtr errorLength);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int ConfigureGemmaRules(IntPtr model,byte[] exclusions,byte[] error,UIntPtr errorLength);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int RunModel(IntPtr model,byte[] pixels,int width,int height,out double score,byte[] error,UIntPtr errorLength);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate void CloseModel(IntPtr model);
 
@@ -158,7 +159,8 @@ namespace MediaReviewer {
                     var run=Native.Export<RunModel>(prefix+"score");close=Native.Export<CloseModel>(prefix+"close");
                     if(gemma){
                         if(!GemmaCpuSupported())throw new InvalidDataException("Gemma requires AVX2, FMA and F16C enabled on this computer or VM.");
-                        string rubric=GemmaCriteria.Prompt(GemmaCriteria.Normalize(ReadText(reader,GemmaCriteria.Limit*4)));
+                        string saved=GemmaCriteria.Normalize(ReadText(reader,GemmaCriteria.Limit*4));bool customRules=GemmaCriteria.IsInstructions(saved);
+                        string rubric=customRules ? GemmaCriteria.MatchPrompt(GemmaCriteria.Editable(saved)) : GemmaCriteria.Prompt(saved);
                         IntPtr gpu=IntPtr.Zero;
                         if(useGpu){
                             gpu=Native.Export<FindGpu>("mcr_gemma_find_gpu")(error,(UIntPtr)error.Length);
@@ -168,6 +170,10 @@ namespace MediaReviewer {
                         using(var modelLease=VerifiedGemmaFile(weights,GemmaSha))
                         using(var projectorLease=VerifiedGemmaFile(projector,ProjectorSha))
                             model=Native.Export<OpenGemma>(prefix+"open")(Native.Text(weights),Native.Text(projector),gpu,Native.Text(rubric),error,(UIntPtr)error.Length);
+                        if(model!=IntPtr.Zero && customRules){
+                            string ignore=GemmaCriteria.IgnoreText(saved);
+                            if(Native.Export<ConfigureGemmaRules>("mcr_gemma_set_rules")(model,Native.Text(ignore=="" ? "" : GemmaCriteria.MatchPrompt(ignore)),error,(UIntPtr)error.Length)!=0)throw new InvalidDataException(ErrorText(error));
+                        }
                     }else{
                         byte[] bytes=LoadModel(Path.Combine(directory,FileName));
                         model=Native.Export<OpenModel>(prefix+"open")(bytes,(UIntPtr)bytes.Length,error,(UIntPtr)error.Length);

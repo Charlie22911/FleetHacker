@@ -166,6 +166,8 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 r.AiScoreModel=r.UseGemma ? GemmaCriteria.Model(criteria) : DraftReview.Model;
                 var result=r.Bucket=="EVIDENCE" ? ProtectedPage(db,r) : OrdinaryPage(db,r);
                 result.GemmaCriteria=criteria;
+                result.GemmaCustomCriteria=DraftReview.ReadCustomCriteria(db);
+                result.GemmaCustomThreshold=DraftReview.ReadCustomThreshold(db);
                 result.UseGemma=r.UseGemma;
                 result.MarqoThreshold=DraftReview.Threshold(db,false);result.GemmaThreshold=DraftReview.Threshold(db,true);
                 result.GemmaCpuOnly=DraftReview.GemmaCpuOnly(db);

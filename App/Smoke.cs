@@ -378,7 +378,7 @@ namespace MediaReviewer {
                         var result=Result(engine,engine.RequestDraftReview(true,true));
                         Check(result.Value.Contains("1 new scores saved") && engine.GemmaStatus=="Gemma is ready · CPU",
                             "The preloaded Gemma worker must score an offline preview and stay ready after the draft.");
-                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=? AND model=?",row.ContentId,DraftReview.Gemma));
+                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model("")));
                         Wait(()=>!engine.DraftReviewActive);
                         engine.ConfigureGemma(false,true,"");
                         Console.WriteLine("Gemma loaded before the draft and stayed ready after scoring an offline preview.");
@@ -399,6 +399,9 @@ namespace MediaReviewer {
                     "Lowering the threshold must reuse the saved score.");
                 Wait(()=>!engine.DraftReviewActive);
                 Result(engine,engine.RequestDraftThreshold(80,true,true));
+                engine.WaitWrite(writer=>{writer.Execute("INSERT INTO ai_draft_scores(content_id,preview_revision,model,score) VALUES(?,?,?,?) ON CONFLICT(content_id,model) DO UPDATE SET score=excluded.score",row.ContentId,row.PreviewRevision,DraftReview.Gemma,.97);return null;});
+                var oldDefault=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS",GemmaAvailable=true})).Page;
+                Check(oldDefault.UseGemma && oldDefault.Total==0,"Scores from the old default rubric must not be reused with the revised criteria.");
                 Result(engine,engine.RequestDraftReview(()=>new FixtureDraftClassifier(.55),true));
                 var gemmaPage=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS",GemmaAvailable=true})).Page;
                 var fallbackPage=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS"})).Page;
@@ -421,6 +424,30 @@ namespace MediaReviewer {
                 Result(engine,engine.RequestDraftThreshold(55,true,true,GemmaCriteria.Default));
                 Check(Result(engine,engine.RequestPage(customRequest)).Page.Rows.Single().AiScore==.55,
                     "Resetting the Gemma criteria must restore the cached default scores.");
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.GemmaCustomCriteria==custom,"Switching to a built-in preset must retain the saved custom rules.");
+                Result(engine,engine.RequestDraftThreshold(55,true,true,custom));
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.Rows.Single().AiScore==.90,"Returning to unchanged Custom rules must reuse their saved scores.");
+                Result(engine,engine.RequestDraftThreshold(90,true,true,""));
+                using(var savedFilter=new SqliteConnection(db,true))Check((string)savedFilter.Scalar("SELECT value FROM settings WHERE key='ai.draft.gemma.custom.threshold'")=="55","Remembered advanced Custom rules must retain their own filter when a built-in preset is saved.");
+                string plain=GemmaCriteria.FromRules("Firearms","Toys and water guns");
+                Result(engine,engine.RequestDraftThreshold(97,true,true,plain));
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.Total==0,"Custom instructions must not reuse the default rubric's scores.");
+                Result(engine,engine.RequestDraftReview(()=>new FixtureDraftClassifier(.97),true));Wait(()=>!engine.DraftReviewActive);
+                var plainPage=Result(engine,engine.RequestPage(customRequest)).Page;
+                Check(plainPage.Total==1 && plainPage.GemmaCriteria==plain,"Plain custom rules must persist and use their own scored suggestions.");
+                Result(engine,engine.RequestDraftThreshold(97,true,true,GemmaCriteria.FromRules("Firearms","All drawings")));
+                Check(Result(engine,engine.RequestPage(customRequest)).Page.Total==0,"Changing only exclusions must require new custom scores.");
+                Result(engine,engine.RequestDraftThreshold(55,true,true,""));
+                foreach(int percent in new[]{55,90,97}){
+                    Result(engine,engine.RequestDraftThreshold(percent,true,true,""));
+                    foreach(double score in new[]{.08,.55,.82,.90,.97}){
+                        engine.WaitWrite(writer=>writer.Execute("UPDATE ai_draft_scores SET score=? WHERE content_id=? AND model=?",score,row.ContentId,GemmaCriteria.Model("")));
+                        bool included=percent==55 ? score!=.08 : percent==90 ? score==.90 || score==.97 : score==.97;
+                        Check((Result(engine,engine.RequestPage(customRequest)).Page.Total==1)==included,"Preset filtering must include only its supported Gemma categories.");
+                    }
+                }
+                engine.WaitWrite(writer=>writer.Execute("UPDATE ai_draft_scores SET score=.55 WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model("")));
+                Result(engine,engine.RequestDraftThreshold(55,true,true,""));
                 Result(engine,engine.RequestDraftThreshold(75));
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket=DraftReview.Bucket})).Page.Rows.Single().AiScore==.86,
                     "Changing the Gemma criteria must leave Marqo scores untouched.");

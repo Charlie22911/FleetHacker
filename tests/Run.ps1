@@ -26,6 +26,7 @@ try{
     Suite 'Reliability' {& "$PSScriptRoot/Reliability.ps1" -Executable $script:app} $nativeMissing
     Suite 'StegoPolicy' {AppCheck '--verify-stego-policy'} $nativeMissing
     Suite 'ReviewUI' {AppCheck '--verify-review-ui'} $desktopMissing
+    Suite 'DraftUI' {AppCheck '--verify-draft-ui'} $desktopMissing
     Suite 'Smoke' {& "$PSScriptRoot/Smoke.ps1" -Executable $script:app -PreviewFixtures $PreviewFixtures -HtmlFixture $HtmlFixture -PlaybackFixtures $PlaybackFixtures -DraftModel $DraftModel} $desktopMissing
     Suite 'Workflow' {& "$PSScriptRoot/Workflow.ps1" -Executable $script:app} $desktopMissing
     Suite 'Gallery' {AppCheck '--verify-gallery'} $desktopMissing

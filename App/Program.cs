@@ -62,6 +62,7 @@ namespace MediaReviewer {
                 if(mode=="--verify-stego-policy" && args.Length==2)return StegoPolicySmoke.Run(args[1]);
                 if(mode=="--verify-preview-memory" && (args.Length==2 || args.Length==3))return PreviewMemorySmoke.Run(args[1],args.Length==3 ? args[2] : null);
                 if(mode=="--verify-review-ui" && args.Length==2)return ReviewUiSmoke.Run(args[1]);
+                if(mode=="--verify-draft-ui" && args.Length==2)return DraftReviewSmoke.Run(args[1]);
                 if(mode=="--verify-stego-notes" && args.Length==2)return StegoQueueSmoke.NotesRun(args[1]);
                 if(mode=="--verify-stego-interface" && args.Length==2)return StegoQueueSmoke.InterfaceRun(args[1]);
                 if(mode=="--verify-gallery" && args.Length==2)return GalleryAnimationSmoke.Run(args[1]);
@@ -131,7 +132,7 @@ namespace MediaReviewer {
                     return app.Run(controller.Window);
                 }
             }catch(Exception error) {
-                if(headless || mode=="--self-test" || mode=="--window-smoke" || mode=="--preview-worker" || mode=="--draft-worker" || mode=="--playback-worker" || mode=="--verify-previews" || mode=="--verify-import")Console.Error.WriteLine(error);
+                if(headless || mode=="--verify-draft-ui" || mode=="--self-test" || mode=="--window-smoke" || mode=="--preview-worker" || mode=="--draft-worker" || mode=="--playback-worker" || mode=="--verify-previews" || mode=="--verify-import")Console.Error.WriteLine(error);
                 else MessageBox.Show(error.GetBaseException().Message,"Media Compliance Reviewer could not start",MessageBoxButton.OK,MessageBoxImage.Error);
                 return 1;
             }finally {

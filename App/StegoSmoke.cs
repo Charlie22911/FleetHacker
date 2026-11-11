@@ -42,9 +42,10 @@ namespace MediaReviewer {
                 Check(rows.Count==1 && (string)rows[0][0]==digest,"Results must be bound to original-byte SHA-256");
                 Check((string)rows[0][1]=="partial","Incomplete Aletheia coverage must be stored as partial");
                 Check(((string)rows[0][3]).Contains("Original Aletheia A-model mean") && !((string)rows[0][3]).Contains("\"state\": \"failed\""),"Original Aletheia inference must run successfully");
-                if(Path.GetFileName(fixture)=="lsb.png" || Path.GetFileName(fixture)=="appended.jpg"){
-                    Check(Convert.ToInt32(rows[0][2])==80 && ((string)rows[0][3]).Contains("validated_payload"),"The generated hidden ZIP must be recovered and validated");
+                if(Path.GetFileName(fixture)=="lsb.png" || Path.GetFileName(fixture)=="appended.jpg" || Path.GetFileName(fixture)=="a-lsb-png.png"){
+                    Check(Convert.ToInt32(rows[0][2])==80 && ((string)rows[0][3]).Contains("validated_payload"),"The generated hidden file must be recovered and validated");
                     Check(StegoFindings.Count(db)==1 && ((string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group)).Contains("Confidence: Strong evidence") && ((string)rows[0][3]).Contains("reviewNote"),"Actual detector findings must populate Steganography and save confidence notes");
+                    if(Path.GetFileName(fixture)=="a-lsb-png.png")Check(((string)db.Scalar("SELECT notes FROM review_groups WHERE id=?",group)).Contains("PNG image hidden in image bits"),"The recovered image must be identified as PNG in its saved review notes");
                 }
                 string json=(string)rows[0][3];db.Execute("UPDATE review_groups SET status='EVIDENCE' WHERE id=?",group);bool blocked=false;
                 try{Catalog.SaveStego(db,group,content,digest,new string('a',64),json,original);}catch(InvalidOperationException){blocked=true;}

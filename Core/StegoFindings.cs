@@ -17,7 +17,10 @@ namespace MediaReviewer {
         internal static bool Finished(Dictionary<string,object> result){return new[]{"completed","partial","unsupported","limited"}.Contains(Text(result,"status")) && !Records(result,"engines").Any(e=>new[]{"failed","timed_out","unavailable","cancelled"}.Contains(Text(e,"state")));}
         static int Rank(Dictionary<string,object> f){string kind=Text(f,"kind");return kind=="validated_payload" ? 3 : kind=="statistical" ? 2 : kind=="recognized_structure" ? 0 : 1;}
         static string Method(Dictionary<string,object> f){
-            string method=Text(f,"method");if(Text(f,"kind")=="validated_payload")return method.StartsWith("b",StringComparison.Ordinal) ? "ZIP archive hidden in image bits ("+(method.IndexOf(",lsb,",StringComparison.Ordinal)>=0 ? "LSB" : method.IndexOf(",msb,",StringComparison.Ordinal)>=0 ? "MSB" : "bit planes")+")" : "Embedded ZIP archive";
+            string method=Text(f,"method");if(Text(f,"kind")=="validated_payload"){
+                string type=Text(f,"payloadType"),label=type=="png" ? "PNG image" : type=="jpeg" ? "JPEG image" : "ZIP archive";
+                return method.StartsWith("b",StringComparison.Ordinal) ? label+" hidden in image bits ("+(method.IndexOf(",lsb,",StringComparison.Ordinal)>=0 ? "LSB" : method.IndexOf(",msb,",StringComparison.Ordinal)>=0 ? "MSB" : "bit planes")+")" : "Embedded "+label;
+            }
             switch(method){case "lsbr":return "Possible LSB replacement";case "lsbm":return "Possible LSB matching";case "hill":return "Possible HILL";case "uniw":return "Possible S-UNIWARD";case "juniw":return "Possible J-UNIWARD";case "steghide":return "Possible Steghide";case "outguess":return "Possible OutGuess";case "nsf5":return "Possible nsF5";default:return method.StartsWith("b",StringComparison.Ordinal) ? "Possible data in image bit planes ("+method+")" : "Unconfirmed "+(method.Length==0 ? "hidden-data indicator" : method)+" indicator";}
         }
         internal static string Note(Dictionary<string,object> value,string at){

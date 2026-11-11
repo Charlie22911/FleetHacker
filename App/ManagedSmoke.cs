@@ -28,6 +28,16 @@ namespace MediaReviewer {
             Check(rejected && queue.Count==0,"Oversized result retention must fail without enqueueing partial work");
             var lead=new Dictionary<string,object>{{"findings",new[]{new Dictionary<string,object>{{"kind","statistical"},{"confidence",0.99},{"reliability","complete"}}}}};
             Check(!StegoConfidence.Evaluate(lead,90).Qualifies,"Uncalibrated raw statistical claims must remain leads");
+            string instructions="Firearms",exclusions="Toys and water guns",custom=null;
+            try{custom=GemmaCriteria.FromRules(instructions,exclusions);}catch(ArgumentException){}
+            Check(custom!=null && GemmaCriteria.Prompt(custom).Contains(instructions) && GemmaCriteria.Prompt(custom).Contains(exclusions),"Plain-language find and ignore rules must be accepted without requiring category labels.");
+            Check(GemmaCriteria.Normalize(custom)==custom,"Saved custom instructions must survive normalization without changing their score identity.");
+            Check(GemmaCriteria.Editable(custom)==instructions && GemmaCriteria.IgnoreText(custom)==exclusions,"Editing saved rules must restore both Find and Ignore instructions.");
+            string bounded=GemmaCriteria.FromRules(new string('x',GemmaCriteria.InstructionsLimit),"");
+            Check(bounded.Length<=GemmaCriteria.Limit,"Plain instructions at the input limit must fit the worker protocol.");
+            bool longRulesRejected=false;try{GemmaCriteria.FromRules(new string('x',GemmaCriteria.InstructionsLimit),"extra");}catch(ArgumentException){longRulesRejected=true;}Check(longRulesRejected,"Overlong combined instructions must fail before reaching the model worker.");
+            Check(GemmaCriteria.Model(custom)!=GemmaCriteria.Model(GemmaCriteria.FromRules(instructions,"All drawings")),"Changing exclusions must invalidate scores for the earlier custom rules.");
+            string advanced=GemmaCriteria.Default.Replace("maps, diagrams","train diagrams");Check(GemmaCriteria.FromRules(advanced,"")==advanced,"Existing advanced rules must retain their category boundaries when saved.");
             Console.WriteLine("Managed checks passed: full SHA-256, bounded result rejection, conservative confidence, matching source-line symbols. Native host and interactive WPF were not tested.");return 0;
         }
     }

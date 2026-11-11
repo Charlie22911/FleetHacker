@@ -19,6 +19,8 @@ namespace MediaReviewer {
         const string ModelKey="ai.draft.model";
         const string GemmaDeviceKey="ai.draft.gemma.device";
         const string GemmaCriteriaKey="ai.draft.gemma.criteria";
+        const string GemmaCustomKey="ai.draft.gemma.custom";
+        const string GemmaCustomThresholdKey="ai.draft.gemma.custom.threshold";
         static string ModelId(bool gemma){return gemma ? Gemma : Model;}
         static string ThresholdKey(bool gemma){return gemma ? "ai.draft.gemma.threshold" : "ai.draft.threshold";}
         static string ThresholdSql(bool gemma){return "COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key='"+ThresholdKey(gemma)+"' AND CAST(value AS INTEGER) BETWEEN 1 AND 99),"+(gemma ? DefaultGemmaThreshold : DefaultMarqoThreshold).ToString(CultureInfo.InvariantCulture)+")";}
@@ -34,6 +36,8 @@ namespace MediaReviewer {
         internal static bool GemmaCpuOnly(SqliteConnection db){return (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaDeviceKey)=="cpu";}
         internal static int Threshold(SqliteConnection db,bool gemma){return Convert.ToInt32(db.Scalar("SELECT "+ThresholdSql(gemma)),CultureInfo.InvariantCulture);}
         internal static string ReadCriteria(SqliteConnection db){return (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCriteriaKey)??"";}
+        internal static string ReadCustomCriteria(SqliteConnection db){string current=ReadCriteria(db);return current!="" ? current : (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCustomKey)??"";}
+        internal static int ReadCustomThreshold(SqliteConnection db){return ReadCriteria(db)!="" ? Threshold(db,true) : Convert.ToInt32(db.Scalar("SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key=? AND CAST(value AS INTEGER) BETWEEN 1 AND 99),?)",GemmaCustomThresholdKey,DefaultGemmaThreshold),CultureInfo.InvariantCulture);}
         internal static long Count(SqliteConnection db,bool gemma,string model){
             return (long)db.Scalar("SELECT COUNT(*) FROM ai_draft_scores a JOIN previews ap ON ap.content_id=a.content_id JOIN review_groups g ON g.content_id=a.content_id WHERE "+CurrentScore(model)+" AND a.score>="+ThresholdSql(gemma)+"/100.0 AND g.status='TO_REVIEW' AND g.retired=0");
         }
@@ -41,12 +45,15 @@ namespace MediaReviewer {
             if(percent<1 || percent>99)throw new ArgumentOutOfRangeException("percent","Enter a threshold from 1 to 99 percent.");
             db.Execute("BEGIN IMMEDIATE");
             try{
+                string previous=gemma ? ReadCriteria(db) : "",remembered=gemma ? ReadCustomCriteria(db) : "";
+                int previousThreshold=gemma ? Threshold(db,true) : 0;
                 db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",ThresholdKey(gemma),percent.ToString(CultureInfo.InvariantCulture),ModelKey,ModelId(gemma));
                 if(gemma)db.Execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaDeviceKey,cpuOnly ? "cpu" : "auto");
                 if(gemma && criteria!=null){
-                    string previous=ReadCriteria(db);
+                    string custom=criteria!="" ? criteria : previous;
+                    if(custom!="")db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCustomKey,custom,GemmaCustomThresholdKey,(criteria!="" ? percent : previousThreshold).ToString(CultureInfo.InvariantCulture));
                     if(criteria!=previous){
-                        if(previous!="")db.Execute("DELETE FROM ai_draft_scores WHERE model=?",GemmaCriteria.Model(previous));
+                        if(criteria!="" && remembered!="" && remembered!=criteria)db.Execute("DELETE FROM ai_draft_scores WHERE model=?",GemmaCriteria.Model(remembered));
                         db.Execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCriteriaKey,criteria);
                     }
                 }

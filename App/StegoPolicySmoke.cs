@@ -14,6 +14,9 @@ namespace MediaReviewer {
             foreach(int threshold in new[]{50,90,100})Check(!StegoConfidence.Evaluate(lead,threshold).Qualifies,"Uncalibrated model output must remain a saved lead at every threshold.");
             var payload=Result(new Dictionary<string,object>{{"kind","validated_payload"},{"engine","binwalk"},{"payloadSha256",new string('a',64)}});
             Check(StegoConfidence.Evaluate(payload,100).Qualifies && StegoConfidence.Evaluate(payload,90).EvidenceKind=="verified","Verified payloads must qualify independently of numeric confidence.");
+            var image=Result(new Dictionary<string,object>{{"kind","validated_payload"},{"engine","zsteg"},{"method","b1,rgb,lsb,xy"},{"payloadType","png"},{"payloadSha256",new string('b',64)}});
+            string imageNote=StegoFindings.Note(image,"2026-01-01T00:00:00Z");
+            Check(StegoConfidence.Evaluate(image,90).Qualifies && imageNote.Contains("PNG image hidden in image bits") && !imageNote.Contains("ZIP archive"),"A recovered PNG must qualify with its actual file type in the review notes.");
             var invalid=Result(new Dictionary<string,object>{{"kind","validated_payload"},{"engine","binwalk"},{"payloadSha256","invalid"}});Check(!StegoConfidence.Evaluate(invalid,90).Qualifies,"Malformed payload identity cannot qualify.");
             foreach(double score in new[]{0.8999,0.90,0.9001})Check(!StegoConfidence.Evaluate(Result(new {kind="statistical",value=score}),90).Qualifies,"Raw boundary scores cannot establish reliable confidence.");
             Check(new StegoScanOptions().MinimumConfidencePercent==90,"A new confidence setting defaults to90.");
