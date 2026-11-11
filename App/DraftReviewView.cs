@@ -7,7 +7,7 @@ using System.Windows.Threading;
 namespace MediaReviewer {
     sealed partial class ReviewerWindow {
         sealed class DraftPreset {
-            internal string Name,Description;internal int Threshold;internal bool Custom;
+            internal string Name,Description,Criteria="";internal int Threshold;internal bool Custom;
             public override string ToString(){return Name;}
         }
         void ShowDraftReview(){
@@ -48,20 +48,20 @@ namespace MediaReviewer {
             var detailDescription=Label("");gemmaPanel.Children.Add(detailDescription);
             gemmaPanel.Children.Add(Label("Review preset"));
             var preset=new ComboBox {Name="GemmaReviewPreset",IsEnabled=!engine.DraftReviewActive};
-            var more=new DraftPreset {Name="More suggestions",Threshold=55,Description="Flag nudity, sexualized posing and concerning unclear images."};
+            var more=new DraftPreset {Name="More suggestions",Threshold=55,Criteria=GemmaCriteria.Recommended,Description="Find nudity, suggestive poses and sexualized artwork."};
             var fewer=new DraftPreset {Name="Fewer suggestions",Threshold=90,Description="Focus on nudity and sexualized underwear posing."};
             var nudity=new DraftPreset {Name="Nudity only",Threshold=97,Description="Flag visible or clearly implied nudity, including artistic nudity."};
             var custom=new DraftPreset {Name="Custom",Threshold=97,Custom=true,Description="Flag matches to your rules. Ignore rules take priority."};
             foreach(var choice in new[]{more,fewer,nudity,custom})preset.Items.Add(choice);
-            DraftPreset initial=gemmaCriteria!="" ? custom : gemmaThreshold>8 && gemmaThreshold<=55 ? more : gemmaThreshold>82 && gemmaThreshold<=90 ? fewer : gemmaThreshold>90 && gemmaThreshold<=97 ? nudity : null;
-            if(initial==null){initial=new DraftPreset {Name="Saved filter",Threshold=gemmaThreshold,Description="Keep your saved filter, or choose a preset to change it."};preset.Items.Add(initial);}
+            DraftPreset initial=GemmaCriteria.IsCustom(gemmaCriteria) ? custom : gemmaCriteria==GemmaCriteria.Recommended && gemmaThreshold==55 ? more : gemmaCriteria=="" && gemmaThreshold>82 && gemmaThreshold<=90 ? fewer : gemmaCriteria=="" && gemmaThreshold>90 && gemmaThreshold<=97 ? nudity : null;
+            if(initial==null){initial=new DraftPreset {Name="Saved filter",Threshold=gemmaThreshold,Criteria=gemmaCriteria,Description="Keep your saved filter, or choose a preset to change it."};preset.Items.Add(initial);}
             preset.SelectedItem=initial;System.Windows.Automation.AutomationProperties.SetName(preset,"Gemma review preset");gemmaPanel.Children.Add(preset);
             var description=Label("");description.Name="GemmaPresetDescription";gemmaPanel.Children.Add(description);
             var customPanel=new StackPanel {Name="GemmaCustomOptions"};gemmaPanel.Children.Add(customPanel);
             var rulesHeader=new DockPanel();customPanel.Children.Add(rulesHeader);
             var help=ActionButton("?",()=>GemmaPromptHelp(dialog).ShowDialog());help.Name="GemmaRulesHelp";help.Width=30;help.ToolTip="How to write find and ignore rules";System.Windows.Automation.AutomationProperties.SetName(help,"Help with Gemma custom rules");Dock(rulesHeader,help,System.Windows.Controls.Dock.Right);
             rulesHeader.Children.Add(Label("Custom rules"));
-            string remembered=gemmaCriteria!="" ? gemmaCriteria : gemmaCustomCriteria;
+            string remembered=GemmaCriteria.IsCustom(gemmaCriteria) ? gemmaCriteria : gemmaCustomCriteria;
             customPanel.Children.Add(Label("Find"));
             var rules=Editor(GemmaCriteria.Editable(remembered),GemmaCriteria.Limit);rules.Name="GemmaCustomRules";rules.AcceptsReturn=true;rules.TextWrapping=TextWrapping.Wrap;rules.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;rules.VerticalContentAlignment=VerticalAlignment.Top;rules.Height=65;rules.IsEnabled=!engine.DraftReviewActive;
             System.Windows.Automation.AutomationProperties.SetName(rules,"What Gemma should find");customPanel.Children.Add(rules);
@@ -98,19 +98,20 @@ namespace MediaReviewer {
                 bool gemma=model.SelectedIndex==1,cpuOnly=device.SelectedIndex==1;var choice=(DraftPreset)preset.SelectedItem;
                 string criteria=null;int percent=(int)slider.Value,side=detail.SelectedIndex==2 ? 1024 : detail.SelectedIndex==1 ? 512 : 256;
                 if(gemma){
-                    percent=choice.Threshold;criteria="";
+                    percent=choice.Threshold;criteria=choice.Criteria;
                     if(choice.Custom){
                         if(String.IsNullOrWhiteSpace(rules.Text))return;
                         try{criteria=GemmaCriteria.FromRules(rules.Text,ignore.Text);}catch(ArgumentException error){feedback.Text=error.Message;feedback.Visibility=Visibility.Visible;rules.Focus();return;}
                         // Retain existing advanced-rubric filters; new plain rules flag only clear matches.
                         percent=GemmaCriteria.IsInstructions(criteria) ? 97 : gemmaCustomThreshold;
                     }
+                    criteria=DraftReview.EffectiveCriteria(criteria,percent);
                 }
                 Queue(engine.RequestDraftThreshold(percent,gemma,cpuOnly,gemma ? criteria : null,gemma ? side : 0),result=>{
                     if(!result.Success){Message("Could not save AI settings. "+result.Error);return;}
                     if(gemma){
-                        if(criteria!=""){gemmaCustomCriteria=criteria;gemmaCustomThreshold=percent;}
-                        else if(gemmaCriteria!=""){gemmaCustomCriteria=gemmaCriteria;gemmaCustomThreshold=gemmaThreshold;}
+                        if(GemmaCriteria.IsCustom(criteria)){gemmaCustomCriteria=criteria;gemmaCustomThreshold=percent;}
+                        else if(GemmaCriteria.IsCustom(gemmaCriteria)){gemmaCustomCriteria=gemmaCriteria;gemmaCustomThreshold=gemmaThreshold;}
                         gemmaSide=side;gemmaThreshold=percent;gemmaCpuOnly=cpuOnly;gemmaCriteria=criteria;
                     }else marqoThreshold=percent;
                     useGemma=gemma;
@@ -119,6 +120,11 @@ namespace MediaReviewer {
                 });dialog.Close();
             });
             start.Click+=(s,e)=>save(true);saveSettings.Click+=(s,e)=>save(false);actions.Children.Add(start);actions.Children.Add(saveSettings);
+            var recommended=ActionButton("Use recommended settings",()=>{
+                if(model.SelectedIndex==1){preset.SelectedItem=more;detail.SelectedIndex=DraftReview.RecommendedGemmaSide==1024 ? 2 : DraftReview.RecommendedGemmaSide==512 ? 1 : 0;}
+                else slider.Value=DraftReview.DefaultMarqoThreshold;
+                update();
+            });recommended.Name="AiDraftRecommended";recommended.IsEnabled=!engine.DraftReviewActive;recommended.ToolTip="Restore recommended review settings. Choose Save settings or Save and run to apply them.";actions.Children.Add(recommended);
             var cancel=ActionButton("Cancel",dialog.Close);cancel.IsCancel=true;actions.Children.Add(cancel);update();return dialog;
         }
         void StartDraftReview(bool gemma,bool cpuOnly){

@@ -38,6 +38,9 @@ namespace MediaReviewer {
                 detail.SelectedIndex=2;
                 Check(presets.Items.Count==4 && presets.SelectedItem.ToString()=="More suggestions","New Gemma settings must show the supported named presets.");
                 Check(!Control<StackPanel>(dialog,"MarqoReviewOptions").IsVisible,"Gemma must hide the continuous Marqo slider.");
+                presets.SelectedIndex=2;detail.SelectedIndex=0;Click(dialog,"AiDraftRecommended");
+                Check(presets.SelectedIndex==0 && detail.SelectedIndex==(DraftReview.RecommendedGemmaSide==1024 ? 2 : DraftReview.RecommendedGemmaSide==512 ? 1 : 0),"Recommended Gemma settings must restore the main preset and recommended detail without running a scan.");
+                detail.SelectedIndex=2;
                 foreach(var theme in ReviewerWindow.Themes){
                     controller.SetTheme(theme.Id);presets.SelectedIndex=0;Save(dialog,Path.Combine(directory,theme.Id+"-more.png"));
                     presets.SelectedIndex=3;Control<TextBox>(dialog,"GemmaCustomRules").Text="Firearms";Control<TextBox>(dialog,"GemmaIgnoreRules").Text="Toys and sports equipment";Save(dialog,Path.Combine(directory,theme.Id+"-custom.png"));
@@ -50,7 +53,7 @@ namespace MediaReviewer {
                 Click(dialog,"AiDraftSave");Wait(()=>{using(var db=new SqliteConnection(path,true))return GemmaCriteria.Editable(Field<string>(controller,"gemmaCriteria"))==rules && GemmaCriteria.Editable(DraftReview.ReadCriteria(db))==rules && GemmaCriteria.IgnoreText(DraftReview.ReadCriteria(db))==ignore && DraftReview.Threshold(db,true)==97 && (string)db.Scalar("SELECT value FROM settings WHERE key='ai.draft.gemma.side'")=="1024";});
                 dialog=controller.CreateDraftReviewWindow();dialog.Show();presets=Control<ComboBox>(dialog,"GemmaReviewPreset");Check(presets.SelectedIndex==3,"Saved Custom rules must reopen as Custom.");presets.SelectedIndex=0;Click(dialog,"AiDraftSave");
                 Check(Control<ComboBox>(dialog,"GemmaScanDetail").SelectedIndex==2,"Thorough must reopen after saving.");
-                Wait(()=>{using(var db=new SqliteConnection(path,true))return Field<string>(controller,"gemmaCriteria")=="" && DraftReview.ReadCriteria(db)=="" && DraftReview.Threshold(db,true)==55;});
+                Wait(()=>{using(var db=new SqliteConnection(path,true))return Field<string>(controller,"gemmaCriteria")==GemmaCriteria.Recommended && DraftReview.ReadCriteria(db)==GemmaCriteria.Recommended && DraftReview.Threshold(db,true)==55;});
                 dialog=controller.CreateDraftReviewWindow();dialog.Show();presets=Control<ComboBox>(dialog,"GemmaReviewPreset");presets.SelectedIndex=3;Check(Control<TextBox>(dialog,"GemmaCustomRules").Text==rules && Control<TextBox>(dialog,"GemmaIgnoreRules").Text==ignore,"Custom rules must survive saving a built-in preset.");
                 Control<ComboBox>(dialog,"DraftModel").SelectedIndex=0;Check(Control<StackPanel>(dialog,"MarqoReviewOptions").IsVisible && !Control<StackPanel>(dialog,"GemmaReviewOptions").IsVisible,"Marqo must keep its continuous score filter.");Control<Slider>(dialog,"MarqoSuggestionThreshold").Value=12;Save(dialog,Path.Combine(directory,"marqo.png"));Click(dialog,"AiDraftSave");
                 Wait(()=>{using(var db=new SqliteConnection(path,true))return !Field<bool>(controller,"useGemma") && !DraftReview.PrefersGemma(db) && DraftReview.Threshold(db,false)==12 && GemmaCriteria.Editable(DraftReview.ReadCustomCriteria(db))==rules;});

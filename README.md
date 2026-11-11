@@ -6,10 +6,10 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.30-preview/FleetHacker-Windows-0.3.30-Preview.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.31-preview/FleetHacker-Windows-0.3.31-Preview.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.30-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.31-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -87,7 +87,7 @@ Gemma offers named presets instead of a continuous slider:
 
 | Preset | What it flags |
 | --- | --- |
-| **More suggestions** (default) | Nudity, sexualized posing (including swimwear), and unclear images with concerning visible details. |
+| **More suggestions** (default) | Nudity, suggestive poses, sexualized artwork and unclear images with visible sexual details. |
 | **Fewer suggestions** | Nudity and sexualized underwear posing. |
 | **Nudity only** | Visible or clearly implied nudity, including artistic nudity. |
 | **Custom** | The content you describe in **Find**, excluding matches to **Ignore**. |
@@ -96,7 +96,11 @@ Ordinary family, beach, pool and sports photos, including nonsexualized swimwear
 
 For **Custom**, enter a concrete description in **Find**, such as `Firearms`, and optional exceptions in **Ignore**, such as `Toys and sports equipment`. Choose **?** for examples and prompting help. Ignore matches take priority. Photos and sampled frames are checked individually. Custom rules with exceptions can take longer to check. Rules are saved per database and remain available when you switch presets. Changing the rules requires new scores; unchanged rules can reuse matching saved scores. Human decisions and Marqo scores are preserved. Earlier advanced rules remain usable, and **Saved filter** retains an older filter that does not match a named preset until you choose another option.
 
-Marqo keeps its continuous slider and defaults to 7%. Lower values show more possible matches; higher values narrow the list. Changing its threshold reuses saved scores. Confirm suggestions yourself: either model can miss content or suggest an ordinary photo.
+Marqo keeps its continuous slider and defaults to 69% for new settings. Lower values show more possible matches; higher values narrow the list. Changing its threshold reuses saved scores. Saved thresholds remain in place. Confirm suggestions yourself: either model can miss content or suggest an ordinary photo.
+
+Choose **Use recommended settings** to load the recommended controls for the selected model, then choose **Save settings** or **Save and run**. Marqo uses 69%. Gemma uses **More suggestions** with **Thorough · 1024 px**. Device preferences and Custom drafts are retained.
+
+**More suggestions** uses a broader rubric for suggestive photos and illustrations. **Fewer suggestions** and **Nudity only** use conservative criteria. Their scores remain separate from the broader rubric, and changing a built-in preset preserves saved Custom rules. The next draft checks unreviewed items that lack scores for the selected rules and image size. See [AI review calibration](docs/AI-Review-Calibration.md) for the measured detection and false-positive tradeoffs.
 
 Use **Scan detail** to choose the maximum image size sent to Gemma:
 
@@ -106,7 +110,7 @@ Use **Scan detail** to choose the maximum image size sent to Gemma:
 
 The limit applies to the longest side; aspect ratio is preserved and small images are not enlarged. Video and GIF frame samples use the selected size. Medium and Thorough require accessible original files that still match their recorded file information. Unavailable or changed originals remain unscored and are included in the completion summary. Original files are unchanged, and larger copies are not stored in the database.
 
-Each size keeps its own results. After changing the size, choose **Save and run** to check items that have no current score for that mode. Returning to an unchanged mode reuses its saved scores. More detail can help with small features, but does not guarantee that Gemma will detect them.
+Each size keeps its own results. After changing the size, choose **Save and run** to check items that have no current score for that mode. Returning to an unchanged mode reuses its saved scores. More detail can help with small features, but does not guarantee that Gemma will detect them. Quick remains the fallback for a database without a saved size; **Use recommended settings** selects Thorough for the broader review preset.
 
 Gemma loads in the background after you open a database on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the database's saved rules and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Expand **Processing options** and select **CPU only** to skip GPU probing. The database remembers this choice and reuses saved scores across CPU and GPU processing. GPU mode uses the existing Windows graphics driver and remains offline.
 

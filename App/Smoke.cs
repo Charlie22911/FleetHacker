@@ -343,6 +343,13 @@ namespace MediaReviewer {
             }
             public void Dispose(){}
         }
+        sealed class GatedDraftClassifier:IDraftClassifier {
+            readonly ManualResetEventSlim entered,release;
+            internal GatedDraftClassifier(ManualResetEventSlim entered,ManualResetEventSlim release){this.entered=entered;this.release=release;}
+            public string Device {get{return "Guard fixture";}}
+            public double? Score(byte[] bytes,CancellationToken token){entered.Set();release.Wait(token);return .90;}
+            public void Dispose(){}
+        }
         static void CheckDraftDetail(string directory){
             string root=Path.Combine(directory,"draft-detail");Directory.CreateDirectory(root);string file=Path.Combine(root,"detail.png");
             var visual=new DrawingVisual();using(var draw=visual.RenderOpen())draw.DrawRectangle(Brushes.CornflowerBlue,null,new Rect(0,0,2048,1536));
@@ -368,10 +375,22 @@ namespace MediaReviewer {
                     Result(engine,engine.RequestDraftReview(()=>classifier,true));Wait(()=>!engine.DraftReviewActive);
                     Check(classifier.Calls==1,"An unchanged repeat scan must resume without rescoring completed items.");
                 }
+                Result(engine,engine.RequestDraftThreshold(90,true,true,"",256));
+                using(var entered=new ManualResetEventSlim())using(var release=new ManualResetEventSlim()){
+                    string running=engine.RequestDraftReview(()=>new GatedDraftClassifier(entered,release),true);Wait(()=>entered.IsSet);
+                    try{
+                        foreach(string criteria in new string[]{"",null}){
+                            var blocked=WaitForResult(engine,engine.RequestDraftThreshold(55,true,true,criteria,256));
+                            Check(!blocked.Success,"Changing a conservative filter to recommended More rules must wait until the running draft finishes.");
+                        }
+                        using(var saved=new SqliteConnection(Path.Combine(directory,"draft-detail.sqlite"),true))Check(DraftReview.Threshold(saved,true)==90 && DraftReview.ReadCriteria(saved)=="","A rejected rule change must leave the running profile unchanged.");
+                    }finally{release.Set();}
+                    Result(engine,running);Wait(()=>!engine.DraftReviewActive);
+                }
                 Result(engine,engine.RequestDraftThreshold(55,true,true,"",256));
                 Check(Result(engine,engine.RequestPage(request)).Page.Total==1,"Returning to Quick must preserve its previous result.");
                 Result(engine,engine.RequestDraftThreshold(55,true,true,"",1024));
-                engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024)));
+                engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel(GemmaCriteria.Recommended,1024)));
                 File.SetLastWriteTimeUtc(file,modified.AddMinutes(1));
                 try{var changed=new DetailFixtureClassifier(1024);Result(engine,engine.RequestDraftReview(()=>changed,true));Wait(()=>!engine.DraftReviewActive);Check(changed.Calls==0 && Result(engine,engine.RequestPage(request)).Page.Total==0,"A changed original must remain unscored until rescanned.");}
                 finally{File.SetLastWriteTimeUtc(file,modified);}
@@ -381,9 +400,9 @@ namespace MediaReviewer {
                 try{var duplicate=new DetailFixtureClassifier(1024);Result(engine,engine.RequestDraftReview(()=>duplicate,true));Wait(()=>!engine.DraftReviewActive);Check(duplicate.Calls==1 && Result(engine,engine.RequestPage(request)).Page.Total==2,"Larger scans must try an unchanged exact duplicate in another root when the first original is offline.");}
                 finally{File.Move(file+".offline",file);}
                 if(DraftModelWorker.GemmaAvailable()){
-                    engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024)));
+                    engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel(GemmaCriteria.Recommended,1024)));
                     Result(engine,engine.RequestDraftReview(true,true));Wait(()=>!engine.DraftReviewActive);
-                    Check(engine.WaitWrite(db=>db.Scalar("SELECT score FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024))) is double,"The bounded Gemma worker must score an actual 1024-pixel input.");
+                    Check(engine.WaitWrite(db=>db.Scalar("SELECT score FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel(GemmaCriteria.Recommended,1024))) is double,"The bounded Gemma worker must score an actual 1024-pixel input.");
                     Console.WriteLine("Gemma Thorough scored a 1024-pixel original copy in the private worker.");
                 }
             }
@@ -407,7 +426,7 @@ namespace MediaReviewer {
                 Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==1);
                 var first=Result(engine,engine.RequestPage(new PageRequest {Generation=1})).Page;
                 Check(first.Total==1 && first.Rows.Count==1,"Scanned item is missing.");
-                Check(first.AiThreshold==7 && first.MarqoThreshold==7 && first.GemmaThreshold==55 && !first.GemmaCpuOnly,
+                Check(first.AiThreshold==DraftReview.DefaultMarqoThreshold && first.MarqoThreshold==DraftReview.DefaultMarqoThreshold && first.GemmaThreshold==55 && !first.GemmaCpuOnly,
                     "A database without saved AI thresholds must use the measured defaults for each model.");
                 var row=first.Rows.Single();id=row.GroupId;rootId=row.RootId;
                 Check(row.PreviewBytes!=null && row.PreviewWidth==1,"Thumbnail was not committed.");
@@ -428,14 +447,14 @@ namespace MediaReviewer {
                         Wait(()=>!engine.DraftReviewActive);
                     }
                     if(DraftModelWorker.GemmaAvailable()){
-                        engine.ConfigureGemma(true,true,"");
+                        engine.ConfigureGemma(true,true,GemmaCriteria.Recommended);
                         Wait(()=>engine.GemmaStatus.StartsWith("Gemma is ready",StringComparison.Ordinal) ||
                             engine.GemmaStatus.StartsWith("Gemma could not load",StringComparison.Ordinal));
                         Check(engine.GemmaStatus=="Gemma is ready · CPU",engine.GemmaStatus);
                         var result=Result(engine,engine.RequestDraftReview(true,true));
                         Check(result.Value.Contains("1 new scores saved") && engine.GemmaStatus=="Gemma is ready · CPU",
                             "The preloaded Gemma worker must score an offline preview and stay ready after the draft.");
-                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model("")));
+                        engine.WaitWrite(writer=>writer.Execute("DELETE FROM ai_draft_scores WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model(GemmaCriteria.Recommended)));
                         Wait(()=>!engine.DraftReviewActive);
                         engine.ConfigureGemma(false,true,"");
                         Console.WriteLine("Gemma loaded before the draft and stayed ready after scoring an offline preview.");
@@ -455,7 +474,7 @@ namespace MediaReviewer {
                 Check(draft.Calls==1 && Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS"})).Page.Total==1,
                     "Lowering the threshold must reuse the saved score.");
                 Wait(()=>!engine.DraftReviewActive);
-                Result(engine,engine.RequestDraftThreshold(80,true,true));
+                Result(engine,engine.RequestDraftThreshold(80,true,true,GemmaCriteria.Recommended,256));
                 engine.WaitWrite(writer=>{writer.Execute("INSERT INTO ai_draft_scores(content_id,preview_revision,model,score) VALUES(?,?,?,?) ON CONFLICT(content_id,model) DO UPDATE SET score=excluded.score",row.ContentId,row.PreviewRevision,DraftReview.Gemma,.97);return null;});
                 var oldDefault=Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket="AI_SUGGESTIONS",GemmaAvailable=true})).Page;
                 Check(oldDefault.UseGemma && oldDefault.Total==0,"Scores from the old default rubric must not be reused with the revised criteria.");
@@ -498,12 +517,12 @@ namespace MediaReviewer {
                 foreach(int percent in new[]{55,90,97}){
                     Result(engine,engine.RequestDraftThreshold(percent,true,true,""));
                     foreach(double score in new[]{.08,.55,.82,.90,.97}){
-                        engine.WaitWrite(writer=>writer.Execute("UPDATE ai_draft_scores SET score=? WHERE content_id=? AND model=?",score,row.ContentId,GemmaCriteria.Model("")));
+                        engine.WaitWrite(writer=>writer.Execute("INSERT INTO ai_draft_scores(content_id,preview_revision,model,score) SELECT content_id,revision,?,? FROM previews WHERE content_id=? ON CONFLICT(content_id,model) DO UPDATE SET score=excluded.score",DraftReview.ScoreModel(DraftReview.ReadCriteria(writer),256),score,row.ContentId));
                         bool included=percent==55 ? score!=.08 : percent==90 ? score==.90 || score==.97 : score==.97;
                         Check((Result(engine,engine.RequestPage(customRequest)).Page.Total==1)==included,"Preset filtering must include only its supported Gemma categories.");
                     }
                 }
-                engine.WaitWrite(writer=>writer.Execute("UPDATE ai_draft_scores SET score=.55 WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model("")));
+                engine.WaitWrite(writer=>writer.Execute("UPDATE ai_draft_scores SET score=.55 WHERE content_id=? AND model=?",row.ContentId,GemmaCriteria.Model(GemmaCriteria.Recommended)));
                 Result(engine,engine.RequestDraftThreshold(55,true,true,""));
                 Result(engine,engine.RequestDraftThreshold(75));
                 Check(Result(engine,engine.RequestPage(new PageRequest {Generation=4,Bucket=DraftReview.Bucket})).Page.Rows.Single().AiScore==.86,

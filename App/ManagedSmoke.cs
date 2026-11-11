@@ -32,6 +32,8 @@ namespace MediaReviewer {
             try{custom=GemmaCriteria.FromRules(instructions,exclusions);}catch(ArgumentException){}
             Check(custom!=null && GemmaCriteria.Prompt(custom).Contains(instructions) && GemmaCriteria.Prompt(custom).Contains(exclusions),"Plain-language find and ignore rules must be accepted without requiring category labels.");
             Check(GemmaCriteria.Normalize(custom)==custom,"Saved custom instructions must survive normalization without changing their score identity.");
+            Check(!GemmaCriteria.IsCustom(GemmaCriteria.Recommended) && GemmaCriteria.IsCustom(custom),"Built-in recommended rules must not replace remembered Custom instructions.");
+            Check(GemmaCriteria.Normalize(GemmaCriteria.Recommended)==GemmaCriteria.Recommended && GemmaCriteria.Model(GemmaCriteria.Recommended)!=GemmaCriteria.Model(""),"The recommended More rubric must retain a separate score identity from conservative presets.");
             Check(GemmaCriteria.Editable(custom)==instructions && GemmaCriteria.IgnoreText(custom)==exclusions,"Editing saved rules must restore both Find and Ignore instructions.");
             string bounded=GemmaCriteria.FromRules(new string('x',GemmaCriteria.InstructionsLimit),"");
             Check(bounded.Length<=GemmaCriteria.Limit,"Plain instructions at the input limit must fit the worker protocol.");

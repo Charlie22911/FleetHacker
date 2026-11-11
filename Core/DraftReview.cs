@@ -15,7 +15,7 @@ namespace MediaReviewer {
 
     internal static class DraftReview {
         internal const string Bucket="AI_SUGGESTIONS",Model="Marqo/nsfw-image-detection-384:1",Gemma="Google/gemma-4-E2B-it-Q4_0+Q8_0:1";
-        internal const int DefaultMarqoThreshold=7,DefaultGemmaThreshold=55;
+        internal const int DefaultMarqoThreshold=69,DefaultGemmaThreshold=55,RecommendedGemmaSide=1024;
         const string ModelKey="ai.draft.model";
         const string GemmaDeviceKey="ai.draft.gemma.device";
         const string GemmaSideKey="ai.draft.gemma.side";
@@ -40,9 +40,10 @@ namespace MediaReviewer {
         internal static int CheckSide(int side){if(side!=256 && side!=512 && side!=1024)throw new ArgumentOutOfRangeException("side","Choose Quick, Medium or Thorough.");return side;}
         internal static int FrameLimit(int side){return CheckSide(side)==256 ? 32768 : InspectionPlan.EncodedLimit;}
         internal static string ScoreModel(string criteria,int side){CheckSide(side);return GemmaCriteria.Model(criteria)+(side==256 ? "" : ":pixels-"+side.ToString(CultureInfo.InvariantCulture));}
-        internal static string ReadCriteria(SqliteConnection db){return (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCriteriaKey)??"";}
-        internal static string ReadCustomCriteria(SqliteConnection db){string current=ReadCriteria(db);return current!="" ? current : (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCustomKey)??"";}
-        internal static int ReadCustomThreshold(SqliteConnection db){return ReadCriteria(db)!="" ? Threshold(db,true) : Convert.ToInt32(db.Scalar("SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key=? AND CAST(value AS INTEGER) BETWEEN 1 AND 99),?)",GemmaCustomThresholdKey,DefaultGemmaThreshold),CultureInfo.InvariantCulture);}
+        internal static string EffectiveCriteria(string criteria,int percent){return String.IsNullOrEmpty(criteria) && percent==DefaultGemmaThreshold ? GemmaCriteria.Recommended : criteria??"";}
+        internal static string ReadCriteria(SqliteConnection db){return EffectiveCriteria((string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCriteriaKey),Threshold(db,true));}
+        internal static string ReadCustomCriteria(SqliteConnection db){string current=ReadCriteria(db);return GemmaCriteria.IsCustom(current) ? current : (string)db.Scalar("SELECT value FROM settings WHERE key=?",GemmaCustomKey)??"";}
+        internal static int ReadCustomThreshold(SqliteConnection db){return GemmaCriteria.IsCustom(ReadCriteria(db)) ? Threshold(db,true) : Convert.ToInt32(db.Scalar("SELECT COALESCE((SELECT CAST(value AS INTEGER) FROM settings WHERE key=? AND CAST(value AS INTEGER) BETWEEN 1 AND 99),?)",GemmaCustomThresholdKey,DefaultGemmaThreshold),CultureInfo.InvariantCulture);}
         internal static long Count(SqliteConnection db,bool gemma,string model){
             return (long)db.Scalar("SELECT COUNT(*) FROM ai_draft_scores a JOIN previews ap ON ap.content_id=a.content_id JOIN review_groups g ON g.content_id=a.content_id WHERE "+CurrentScore(model)+" AND a.score>="+ThresholdSql(gemma)+"/100.0 AND g.status='TO_REVIEW' AND g.retired=0");
         }
@@ -52,16 +53,17 @@ namespace MediaReviewer {
             db.Execute("BEGIN IMMEDIATE");
             try{
                 string previous=gemma ? ReadCriteria(db) : "",remembered=gemma ? ReadCustomCriteria(db) : "";
+                if(gemma)criteria=EffectiveCriteria(criteria??previous,percent);
                 int previousThreshold=gemma ? Threshold(db,true) : 0;
                 db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",ThresholdKey(gemma),percent.ToString(CultureInfo.InvariantCulture),ModelKey,ModelId(gemma));
                 if(gemma)db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaDeviceKey,cpuOnly ? "cpu" : "auto",GemmaSideKey,side.ToString(CultureInfo.InvariantCulture));
                 if(gemma && criteria!=null){
-                    string custom=criteria!="" ? criteria : previous;
-                    if(custom!="")db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCustomKey,custom,GemmaCustomThresholdKey,(criteria!="" ? percent : previousThreshold).ToString(CultureInfo.InvariantCulture));
+                    string custom=GemmaCriteria.IsCustom(criteria) ? criteria : GemmaCriteria.IsCustom(previous) ? previous : "";
+                    if(custom!="")db.Execute("INSERT INTO settings(key,value) VALUES(?,?),(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCustomKey,custom,GemmaCustomThresholdKey,(GemmaCriteria.IsCustom(criteria) ? percent : previousThreshold).ToString(CultureInfo.InvariantCulture));
                     if(criteria!=previous){
-                        if(criteria!="" && remembered!="" && remembered!=criteria)foreach(int resolution in new[]{256,512,1024})db.Execute("DELETE FROM ai_draft_scores WHERE model=?",ScoreModel(remembered,resolution));
-                        db.Execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCriteriaKey,criteria);
+                        if(GemmaCriteria.IsCustom(criteria) && remembered!="" && remembered!=criteria)foreach(int resolution in new[]{256,512,1024})db.Execute("DELETE FROM ai_draft_scores WHERE model=?",ScoreModel(remembered,resolution));
                     }
+                    db.Execute("INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",GemmaCriteriaKey,criteria);
                 }
                 Catalog.Bump(db);db.Execute("COMMIT");
             }catch{Catalog.Rollback(db);throw;}
@@ -265,12 +267,13 @@ namespace MediaReviewer {
             string normalized=gemma && criteria!=null ? GemmaCriteria.Normalize(criteria) : null;
             var work=new DbWork {Body=db=>{
                     int resolution=gemma && side!=0 ? side : DraftReview.ReadSide(db);
-                    bool changed=gemma && (normalized!=null && normalized!=DraftReview.ReadCriteria(db) || resolution!=DraftReview.ReadSide(db));
+                    string effective=gemma ? DraftReview.EffectiveCriteria(normalized??DraftReview.ReadCriteria(db),percent) : normalized;
+                    bool changed=gemma && (effective!=DraftReview.ReadCriteria(db) || resolution!=DraftReview.ReadSide(db));
                     if(changed)lock(scanGate){
                         if(draftReviewActive)throw new InvalidOperationException("Finish or stop the draft check before changing Gemma criteria.");
                         draftCriteriaSaving=true;
                     }
-                    try{DraftReview.SaveThreshold(db,percent,gemma,cpuOnly,normalized,resolution);}
+                    try{DraftReview.SaveThreshold(db,percent,gemma,cpuOnly,effective,resolution);}
                     finally{if(changed)lock(scanGate)draftCriteriaSaving=false;}
                     return null;
                 },
