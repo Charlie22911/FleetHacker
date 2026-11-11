@@ -44,7 +44,7 @@ static class DecoderProgram {
                                 gallery=gif.Read();
                             }
                             frames=gallery==null ? new PreviewResult[0] : new[]{gallery.Preview};
-                        }else if(kind==2)frames=MediaDecode.CreateMotion(path,size,ticks,identity,root);
+                        }else if(kind==2)frames=MediaDecode.CreateMotion(path,size,ticks,identity,root,side,limit);
                         else frames=new[]{kind==1 ? MediaDecode.CreateSavedWebp(saved) : MediaDecode.CreateScoped(path,size,ticks,identity,side,limit,root)};
                     }
                     output.Write(0);

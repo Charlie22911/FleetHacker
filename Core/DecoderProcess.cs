@@ -55,12 +55,12 @@ namespace MediaReviewer {
         internal PreviewResult CreateScoped(string path,long size,long ticks,string identity,int side,int byteLimit,CancellationToken token,string root){
             return Request(PathRequest(0,path,size,ticks,identity,side,byteLimit,root),reader=>ReadImage(reader,side,byteLimit),token);
         }
-        internal PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,CancellationToken token,string root){
-            return Request(PathRequest(2,path,size,ticks,identity,256,32768,root),reader=>{
+        internal PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,CancellationToken token,string root,int side=256,int byteLimit=32768){
+            return Request(PathRequest(2,path,size,ticks,identity,side,byteLimit,root),reader=>{
                 int count=reader.ReadInt32();
                 if(count<1 || count>5)throw new DecoderProtocolException("Invalid private motion frame count");
                 var frames=new PreviewResult[count];
-                for(int i=0;i<count;i++)frames[i]=ReadImage(reader,256,32768);
+                for(int i=0;i<count;i++)frames[i]=ReadImage(reader,side,byteLimit);
                 return frames;
             },token);
         }

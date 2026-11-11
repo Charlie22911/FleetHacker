@@ -23,10 +23,11 @@ namespace MediaReviewer {
         bool started;
         readonly bool gemma;
         readonly string criteria;
+        readonly int side;
         bool tryGpu, fellBack;
         public string Device {get;private set;}
 
-        internal DraftModelWorker(bool useGemma=false,bool cpuOnly=false,string criteria=""){gemma=useGemma;tryGpu=gemma && !cpuOnly;this.criteria=criteria;}
+        internal DraftModelWorker(bool useGemma=false,bool cpuOnly=false,string criteria="",int side=256){this.side=useGemma ? DraftReview.CheckSide(side) : 256;gemma=useGemma;tryGpu=gemma && !cpuOnly;this.criteria=criteria;}
 
         internal static string ModelPath(string executable){return Path.Combine(Path.GetDirectoryName(executable),FileName);}
         internal static bool GemmaCpuSupported(){return Native.Export<CpuSupported>("mcr_gemma_cpu_supported")()!=0;}
@@ -56,7 +57,7 @@ namespace MediaReviewer {
                 output.Write(Release);
                 if(gemma){
                     byte[] rubric=Encoding.UTF8.GetBytes(String.IsNullOrEmpty(criteria) ? GemmaCriteria.Default : criteria);
-                    output.Write(rubric.Length);output.Write(rubric);
+                    output.Write(rubric.Length);output.Write(rubric);output.Write(side);
                 }
                 output.Flush();
                 Device=Wait(Task.Run(()=>{
@@ -86,7 +87,7 @@ namespace MediaReviewer {
         void UseCpu(){Dispose();tryGpu=false;fellBack=true;}
 
         public double? Score(byte[] preview,CancellationToken token){
-            if(preview==null || preview.Length<1 || preview.Length>MaxPreview)throw new ArgumentException("Invalid saved preview length.");
+            if(preview==null || preview.Length<1 || preview.Length>(gemma ? DraftReview.FrameLimit(side) : MaxPreview))throw new ArgumentException("Invalid saved preview length.");
             token.ThrowIfCancellationRequested();
             try{return ScoreOnCurrentDevice(preview,token);}
             catch(Exception error){
@@ -151,7 +152,7 @@ namespace MediaReviewer {
             SetErrorMode(0x8003);
             using(var reader=new BinaryReader(Console.OpenStandardInput(),Encoding.UTF8))
             using(var writer=new BinaryWriter(Console.OpenStandardOutput(),Encoding.UTF8)){
-                IntPtr model=IntPtr.Zero;CloseModel close=null;
+                IntPtr model=IntPtr.Zero;CloseModel close=null;int side=256;
                 try{
                     if(reader.ReadInt32()!=Release)throw new InvalidDataException("Missing AI worker parent handshake.");
                     string directory=ExecutableDirectory(),prefix=gemma ? "mcr_gemma_" : "mcr_draft_";
@@ -160,6 +161,7 @@ namespace MediaReviewer {
                     if(gemma){
                         if(!GemmaCpuSupported())throw new InvalidDataException("Gemma requires AVX2, FMA and F16C enabled on this computer or VM.");
                         string saved=GemmaCriteria.Normalize(ReadText(reader,GemmaCriteria.Limit*4));bool customRules=GemmaCriteria.IsInstructions(saved);
+                        side=DraftReview.CheckSide(reader.ReadInt32());
                         string rubric=customRules ? GemmaCriteria.MatchPrompt(GemmaCriteria.Editable(saved)) : GemmaCriteria.Prompt(saved);
                         IntPtr gpu=IntPtr.Zero;
                         if(useGpu){
@@ -183,10 +185,10 @@ namespace MediaReviewer {
                     writer.Write(Ready);writer.Write(device.Length);writer.Write(device);writer.Flush();
                     while(true){
                         int length;try{length=reader.ReadInt32();}catch(EndOfStreamException){return 0;}
-                        if(length<1 || length>MaxPreview)throw new InvalidDataException("Invalid AI preview frame size.");
+                        if(length<1 || length>(gemma ? DraftReview.FrameLimit(side) : MaxPreview))throw new InvalidDataException("Invalid AI preview frame size.");
                         byte[] preview=reader.ReadBytes(length);
                         if(preview.Length!=length)throw new EndOfStreamException();
-                        BitmapSource image=DecodePreview(preview);
+                        BitmapSource image=DecodePreview(preview,side);
                         if(image==null){writer.Write(1);writer.Flush();continue;}
                         int stride=image.PixelWidth*3;byte[] pixels=new byte[stride*image.PixelHeight];image.CopyPixels(pixels,stride,0);
                         double score;
@@ -200,10 +202,10 @@ namespace MediaReviewer {
             }
         }
 
-        static BitmapSource DecodePreview(byte[] preview){
+        static BitmapSource DecodePreview(byte[] preview,int side){
             try{
                 if(ImageHeader.Detect(preview,"")=="webp")preview=MediaDecode.CreateSavedWebp(preview).Bytes;
-                return new FormatConvertedBitmap(MediaLoader.Decode(preview,256),PixelFormats.Bgr24,null,0);
+                return new FormatConvertedBitmap(MediaLoader.Decode(preview,side),PixelFormats.Bgr24,null,0);
             }catch(ArgumentException){return null;}
             catch(InvalidDataException){return null;}
             catch(IOException){return null;}

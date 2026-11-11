@@ -23,8 +23,8 @@ namespace MediaReviewer {
             return DecodeScoped(path,size,ticks,identity,side,limit,root,false)[0];
         }
 
-        internal static PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,string root){
-            return DecodeScoped(path,size,ticks,identity,256,32768,root,true);
+        internal static PreviewResult[] CreateMotion(string path,long size,long ticks,string identity,string root,int side=256,int limit=32768){
+            return DecodeScoped(path,size,ticks,identity,side,limit,root,true);
         }
 
         static PreviewResult[] DecodeScoped(string path,long size,long ticks,string identity,int side,int limit,string root,bool motion){

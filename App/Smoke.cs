@@ -333,7 +333,64 @@ namespace MediaReviewer {
             var result=WaitForResult(engine,request);
             Check(result.Success,result.Error);return result;
         }
+        sealed class DetailFixtureClassifier:IDraftClassifier {
+            readonly int expected;internal int Calls;
+            internal DetailFixtureClassifier(int side){expected=side;}
+            public string Device {get{return "Detail fixture";}}
+            public double? Score(byte[] bytes,CancellationToken token){
+                token.ThrowIfCancellationRequested();int width,height;Preview.Dimensions(bytes,bytes.Length,out width,out height);
+                Check(width==expected && height==expected*3/4,"Gemma must receive the requested image detail from the original, not an enlarged saved thumbnail.");Calls++;return .97;
+            }
+            public void Dispose(){}
+        }
+        static void CheckDraftDetail(string directory){
+            string root=Path.Combine(directory,"draft-detail");Directory.CreateDirectory(root);string file=Path.Combine(root,"detail.png");
+            var visual=new DrawingVisual();using(var draw=visual.RenderOpen())draw.DrawRectangle(Brushes.CornflowerBlue,null,new Rect(0,0,2048,1536));
+            var bitmap=new RenderTargetBitmap(2048,1536,96,96,PixelFormats.Pbgra32);bitmap.Render(visual);
+            var png=new PngBitmapEncoder();png.Frames.Add(BitmapFrame.Create(bitmap));using(var stream=File.Create(file))png.Save(stream);
+            byte[] original=File.ReadAllBytes(file);DateTime modified=File.GetLastWriteTimeUtc(file);
+            using(var engine=ReviewerEngine.Open(Path.Combine(directory,"draft-detail.sqlite"),true)){
+                Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);
+                engine.StartScan(new ScanOptions {RootPath=root,Extensions=new[]{"png"},WorkerCount=1});Wait(()=>!engine.Status.RunningScan && engine.Status.ProcessedFiles==1);
+                var request=new PageRequest {Bucket=DraftReview.Bucket,GemmaAvailable=true};
+                foreach(int side in new[]{256,512,1024}){
+                    Result(engine,engine.RequestDraftThreshold(55,true,true,"",side));
+                    Check(Result(engine,engine.RequestPage(request)).Page.Total==0,"A different scan size must not reuse scores from another mode.");
+                    var classifier=new DetailFixtureClassifier(side);
+                    if(side>256){
+                        File.Move(file,file+".offline");
+                        try{var offline=Result(engine,engine.RequestDraftReview(()=>classifier,true));Check(classifier.Calls==0 && offline.Value.Contains("1 still items"),"Larger scans must report unavailable originals without scoring saved thumbnails.");Wait(()=>!engine.DraftReviewActive);}
+                        finally{File.Move(file+".offline",file);}
+                    }
+                    Result(engine,engine.RequestDraftReview(()=>classifier,true));Wait(()=>!engine.DraftReviewActive);
+                    var page=Result(engine,engine.RequestPage(request)).Page;
+                    Check(classifier.Calls==1 && page.Total==1 && page.GemmaSide==side,"Each scan size must save and display its own result.");
+                    Result(engine,engine.RequestDraftReview(()=>classifier,true));Wait(()=>!engine.DraftReviewActive);
+                    Check(classifier.Calls==1,"An unchanged repeat scan must resume without rescoring completed items.");
+                }
+                Result(engine,engine.RequestDraftThreshold(55,true,true,"",256));
+                Check(Result(engine,engine.RequestPage(request)).Page.Total==1,"Returning to Quick must preserve its previous result.");
+                Result(engine,engine.RequestDraftThreshold(55,true,true,"",1024));
+                engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024)));
+                File.SetLastWriteTimeUtc(file,modified.AddMinutes(1));
+                try{var changed=new DetailFixtureClassifier(1024);Result(engine,engine.RequestDraftReview(()=>changed,true));Wait(()=>!engine.DraftReviewActive);Check(changed.Calls==0 && Result(engine,engine.RequestPage(request)).Page.Total==0,"A changed original must remain unscored until rescanned.");}
+                finally{File.SetLastWriteTimeUtc(file,modified);}
+                string other=Path.Combine(directory,"draft-detail-copy");Directory.CreateDirectory(other);File.Copy(file,Path.Combine(other,"copy.png"));
+                string scan=engine.StartScan(new ScanOptions {RootPath=other,Extensions=new[]{"png"},WorkerCount=1});Wait(()=>!engine.Status.RunningScan && engine.Status.ScanId==scan && engine.Status.ProcessedFiles==1);
+                File.Move(file,file+".offline");
+                try{var duplicate=new DetailFixtureClassifier(1024);Result(engine,engine.RequestDraftReview(()=>duplicate,true));Wait(()=>!engine.DraftReviewActive);Check(duplicate.Calls==1 && Result(engine,engine.RequestPage(request)).Page.Total==2,"Larger scans must try an unchanged exact duplicate in another root when the first original is offline.");}
+                finally{File.Move(file+".offline",file);}
+                if(DraftModelWorker.GemmaAvailable()){
+                    engine.WaitWrite(db=>db.Execute("DELETE FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024)));
+                    Result(engine,engine.RequestDraftReview(true,true));Wait(()=>!engine.DraftReviewActive);
+                    Check(engine.WaitWrite(db=>db.Scalar("SELECT score FROM ai_draft_scores WHERE model=?",DraftReview.ScoreModel("",1024))) is double,"The bounded Gemma worker must score an actual 1024-pixel input.");
+                    Console.WriteLine("Gemma Thorough scored a 1024-pixel original copy in the private worker.");
+                }
+            }
+            Check(original.SequenceEqual(File.ReadAllBytes(file)),"AI detail scans must leave original bytes unchanged.");
+        }
         internal static int Run(string directory,string playbackFixtures=null) {
+            Directory.CreateDirectory(directory);CheckDraftDetail(directory);
             Check(Native.SqliteVersion=="3.54.1","Linked SQLite was not loaded.");
             string root=Directory.CreateDirectory(Path.Combine(directory,"home-share")).FullName;
             string folder=Directory.CreateDirectory(Path.Combine(root,"example.user")).FullName;

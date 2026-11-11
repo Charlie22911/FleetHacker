@@ -163,9 +163,9 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             try {
                 r.UseGemma=r.GemmaAvailable && DraftReview.PrefersGemma(db);
                 string criteria=DraftReview.ReadCriteria(db);
-                r.AiScoreModel=r.UseGemma ? GemmaCriteria.Model(criteria) : DraftReview.Model;
+                r.AiScoreModel=r.UseGemma ? DraftReview.ScoreModel(criteria,DraftReview.ReadSide(db)) : DraftReview.Model;
                 var result=r.Bucket=="EVIDENCE" ? ProtectedPage(db,r) : OrdinaryPage(db,r);
-                result.GemmaCriteria=criteria;
+                result.GemmaCriteria=criteria;result.GemmaSide=DraftReview.ReadSide(db);
                 result.GemmaCustomCriteria=DraftReview.ReadCustomCriteria(db);
                 result.GemmaCustomThreshold=DraftReview.ReadCustomThreshold(db);
                 result.UseGemma=r.UseGemma;

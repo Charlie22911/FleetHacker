@@ -41,6 +41,11 @@ namespace MediaReviewer {
             if(!available)body.Children.Add(Label(DraftModelWorker.GemmaCpuSupported() ? "Place both Gemma GGUF files beside FleetHacker to enable Gemma." : "Gemma is not supported by this device's processor."));
 
             var gemmaPanel=new StackPanel {Name="GemmaReviewOptions"};body.Children.Add(gemmaPanel);
+            gemmaPanel.Children.Add(Label("Scan detail"));
+            var detail=new ComboBox {Name="GemmaScanDetail",IsEnabled=!engine.DraftReviewActive};
+            detail.Items.Add("Quick · 256 px");detail.Items.Add("Medium · 512 px");detail.Items.Add("Thorough · 1024 px");detail.SelectedIndex=gemmaSide==1024 ? 2 : gemmaSide==512 ? 1 : 0;
+            System.Windows.Automation.AutomationProperties.SetName(detail,"Gemma scan detail");gemmaPanel.Children.Add(detail);
+            var detailDescription=Label("");gemmaPanel.Children.Add(detailDescription);
             gemmaPanel.Children.Add(Label("Review preset"));
             var preset=new ComboBox {Name="GemmaReviewPreset",IsEnabled=!engine.DraftReviewActive};
             var more=new DraftPreset {Name="More suggestions",Threshold=55,Description="Flag nudity, sexualized posing and concerning unclear images."};
@@ -80,6 +85,7 @@ namespace MediaReviewer {
             var start=ActionButton("Save and run",()=>{});start.Name="AiDraftRun";start.ToolTip="Check new or changed photos and sampled video frames.";
             var saveSettings=ActionButton("Save settings",()=>{});saveSettings.Name="AiDraftSave";
             update=()=>{
+                detailDescription.Text=detail.SelectedIndex==0 ? "Use saved previews for a quick check." : "Read more detail from original files. May take longer; originals must be available.";
                 bool gemma=model.SelectedIndex==1;var choice=(DraftPreset)preset.SelectedItem;
                 gemmaPanel.Visibility=gemma ? Visibility.Visible : Visibility.Collapsed;marqoPanel.Visibility=gemma ? Visibility.Collapsed : Visibility.Visible;
                 customPanel.Visibility=choice.Custom ? Visibility.Visible : Visibility.Collapsed;description.Text=choice.Description;
@@ -87,10 +93,10 @@ namespace MediaReviewer {
                 saveSettings.IsEnabled=valid;start.IsEnabled=valid && task==null && !engine.Status.RunningScan && !engine.DraftReviewActive;
                 threshold.Text="Suggestion threshold: "+((int)slider.Value).ToString(CultureInfo.InvariantCulture)+"%";
             };
-            model.SelectionChanged+=(s,e)=>update();preset.SelectionChanged+=(s,e)=>{feedback.Visibility=Visibility.Collapsed;update();};slider.ValueChanged+=(s,e)=>update();rules.TextChanged+=(s,e)=>{feedback.Visibility=Visibility.Collapsed;update();};ignore.TextChanged+=(s,e)=>feedback.Visibility=Visibility.Collapsed;
+            detail.SelectionChanged+=(s,e)=>update();model.SelectionChanged+=(s,e)=>update();preset.SelectionChanged+=(s,e)=>{feedback.Visibility=Visibility.Collapsed;update();};slider.ValueChanged+=(s,e)=>update();rules.TextChanged+=(s,e)=>{feedback.Visibility=Visibility.Collapsed;update();};ignore.TextChanged+=(s,e)=>feedback.Visibility=Visibility.Collapsed;
             Action<bool> save=run=>Guard(()=>{
                 bool gemma=model.SelectedIndex==1,cpuOnly=device.SelectedIndex==1;var choice=(DraftPreset)preset.SelectedItem;
-                string criteria=null;int percent=(int)slider.Value;
+                string criteria=null;int percent=(int)slider.Value,side=detail.SelectedIndex==2 ? 1024 : detail.SelectedIndex==1 ? 512 : 256;
                 if(gemma){
                     percent=choice.Threshold;criteria="";
                     if(choice.Custom){
@@ -100,12 +106,12 @@ namespace MediaReviewer {
                         percent=GemmaCriteria.IsInstructions(criteria) ? 97 : gemmaCustomThreshold;
                     }
                 }
-                Queue(engine.RequestDraftThreshold(percent,gemma,cpuOnly,gemma ? criteria : null),result=>{
+                Queue(engine.RequestDraftThreshold(percent,gemma,cpuOnly,gemma ? criteria : null,gemma ? side : 0),result=>{
                     if(!result.Success){Message("Could not save AI settings. "+result.Error);return;}
                     if(gemma){
                         if(criteria!=""){gemmaCustomCriteria=criteria;gemmaCustomThreshold=percent;}
                         else if(gemmaCriteria!=""){gemmaCustomCriteria=gemmaCriteria;gemmaCustomThreshold=gemmaThreshold;}
-                        gemmaThreshold=percent;gemmaCpuOnly=cpuOnly;gemmaCriteria=criteria;
+                        gemmaSide=side;gemmaThreshold=percent;gemmaCpuOnly=cpuOnly;gemmaCriteria=criteria;
                     }else marqoThreshold=percent;
                     useGemma=gemma;
                     if(BucketKeys[bucket]==DraftReview.Bucket)NewPage(1);else{InvalidateThumbnails();refresh=true;}

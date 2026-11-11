@@ -55,6 +55,7 @@ namespace MediaReviewer {
         public long AiTotal,StegoTotal;
         public int AiThreshold=DraftReview.DefaultMarqoThreshold;
         public int MarqoThreshold=DraftReview.DefaultMarqoThreshold,GemmaThreshold=DraftReview.DefaultGemmaThreshold,GemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;
+        public int GemmaSide=256;
         public bool GemmaCpuOnly;
         public string GemmaCriteria="",GemmaCustomCriteria="";
         public bool UseGemma;

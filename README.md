@@ -6,10 +6,10 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.29-preview/FleetHacker-Windows-0.3.29-Preview.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.30-preview/FleetHacker-Windows-0.3.30-Preview.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.29-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.30-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -98,11 +98,19 @@ For **Custom**, enter a concrete description in **Find**, such as `Firearms`, an
 
 Marqo keeps its continuous slider and defaults to 7%. Lower values show more possible matches; higher values narrow the list. Changing its threshold reuses saved scores. Confirm suggestions yourself: either model can miss content or suggest an ordinary photo.
 
-Gemma reviews reduced copies capped at 256 pixels on the longest side, including saved image previews and sampled video and GIF frames. The original files are unchanged.
+Use **Scan detail** to choose the maximum image size sent to Gemma:
 
-Gemma loads in the background after you open a database on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the database's saved rules and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Expand **Processing options** and select **CPU only** to skip GPU probing. The database remembers this choice and reuses saved scores across both modes. GPU mode uses the existing Windows graphics driver and remains offline.
+- **Quick · 256 px** uses saved previews for still images. This is the default.
+- **Medium · 512 px** reads larger copies from the original files.
+- **Thorough · 1024 px** retains more detail from the original files and can take longer.
 
-The draft check runs locally in a private worker from the same executable. Still images use the saved database preview and can be scored with the source disconnected. The AI model makes no network requests.
+The limit applies to the longest side; aspect ratio is preserved and small images are not enlarged. Video and GIF frame samples use the selected size. Medium and Thorough require accessible original files that still match their recorded file information. Unavailable or changed originals remain unscored and are included in the completion summary. Original files are unchanged, and larger copies are not stored in the database.
+
+Each size keeps its own results. After changing the size, choose **Save and run** to check items that have no current score for that mode. Returning to an unchanged mode reuses its saved scores. More detail can help with small features, but does not guarantee that Gemma will detect them.
+
+Gemma loads in the background after you open a database on a supported device with both model files. Check the model status in **AI draft check**. A draft uses the loaded worker with the database's saved rules and device setting. Gemma defaults to **Auto**. With a Vulkan 1.2-capable graphics driver and at least 4 GiB of available graphics memory, Auto tries GPU acceleration for image encoding and language inference. It prefers an eligible dedicated GPU over integrated graphics. If the GPU worker fails, the current image is retried on the CPU and the rest of the run stays on the CPU. The progress message shows the active device. Expand **Processing options** and select **CPU only** to skip GPU probing. The database remembers this choice and reuses saved scores across CPU and GPU processing. GPU mode uses the existing Windows graphics driver and remains offline.
+
+The draft check runs locally in a private worker from the same executable. Marqo and Gemma Quick can score still images from saved previews with the source disconnected. Gemma Medium and Thorough read the originals. The AI model makes no network requests.
 
 ### Video and GIF draft review
 

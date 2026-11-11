@@ -136,7 +136,7 @@ extern "C" int mcr_gemma_set_rules(void* model,const char* exclusions,char* erro
 extern "C" int mcr_gemma_score(void* model, unsigned char* pixels, int width, int height,
                               double* score, char* error, size_t error_length) noexcept {
     try {
-        if (!model || !pixels || width < 1 || height < 1 || width > 256 || height > 256)
+        if (!model || !pixels || width < 1 || height < 1 || width > 1024 || height > 1024)
             throw std::runtime_error("Invalid saved preview dimensions.");
         auto& engine = *static_cast<GemmaDraft*>(model);
         std::vector<unsigned char> rgb(pixels, pixels + width * height * 3);

@@ -52,6 +52,7 @@ namespace MediaReviewer {
         string pageSearch="",pageFolder="";
         DateTime? databaseClosedAt;
         string gemmaCriteria="",gemmaCustomCriteria="";
+        int gemmaSide=256;
         int bucket,page=1,pageCount=1,marqoThreshold=DraftReview.DefaultMarqoThreshold,gemmaThreshold=DraftReview.DefaultGemmaThreshold,gemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;
         bool gemmaAvailable,useGemma,gemmaCpuOnly,gemmaSettingsLoaded;
         long revision=-1;
@@ -231,7 +232,7 @@ namespace MediaReviewer {
             if(protectedWindow!=null)protectedWindow.Close();
             ClearCards();ClearWorkspaceNoteDrafts();pending.Clear();undoStack.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;
             Combo("ViewBox").SelectedIndex=0;
-            marqoThreshold=DraftReview.DefaultMarqoThreshold;gemmaThreshold=gemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;gemmaCriteria=gemmaCustomCriteria="";useGemma=false;gemmaCpuOnly=false;gemmaSettingsLoaded=false;gemmaAvailable=DraftModelWorker.GemmaAvailable();
+            gemmaSide=256;marqoThreshold=DraftReview.DefaultMarqoThreshold;gemmaThreshold=gemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;gemmaCriteria=gemmaCustomCriteria="";useGemma=false;gemmaCpuOnly=false;gemmaSettingsLoaded=false;gemmaAvailable=DraftModelWorker.GemmaAvailable();
             pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
             refresh=true;loadedPreferences=false;preferencesSignature=null;savedPreferences=null;offeredImport=false;
             options.DefaultSourceRoot="";Box("SourceBox").Clear();
@@ -310,7 +311,7 @@ namespace MediaReviewer {
             pageCount=(int)Math.Max(1,Math.Min(Int32.MaxValue,(result.Total+result.PageSize-1)/result.PageSize));
             Box("PageBox").Text=page.ToString(CultureInfo.InvariantCulture);
             Text("PageLabel","Page "+page+" of "+pageCount+" · "+result.Total.ToString("N0")+" matching items");
-            marqoThreshold=result.MarqoThreshold;gemmaThreshold=result.GemmaThreshold;useGemma=result.UseGemma;gemmaCpuOnly=result.GemmaCpuOnly;gemmaCriteria=result.GemmaCriteria;gemmaCustomCriteria=result.GemmaCustomCriteria;gemmaCustomThreshold=result.GemmaCustomThreshold;gemmaSettingsLoaded=true;
+            marqoThreshold=result.MarqoThreshold;gemmaThreshold=result.GemmaThreshold;useGemma=result.UseGemma;gemmaCpuOnly=result.GemmaCpuOnly;gemmaCriteria=result.GemmaCriteria;gemmaSide=result.GemmaSide;gemmaCustomCriteria=result.GemmaCustomCriteria;gemmaCustomThreshold=result.GemmaCustomThreshold;gemmaSettingsLoaded=true;
             Button("Queue4").ToolTip="Suggestions from "+(useGemma ? "Gemma 4 E2B" : "Marqo")+", highest score first by default.";
             for(int i=0;i<BucketNames.Length;i++)Button("Queue"+i).Content=((ComboBoxItem)Combo("ViewBox").Items[i]).Content=BucketIcons[i]+BucketNames[i]+" ("+(i==4 ? result.AiTotal : i==5 ? result.StegoTotal : result.Totals[i]).ToString("N0")+")";
             var active=display==ReviewView.Quick ? QuickCard() : null;
@@ -510,7 +511,7 @@ namespace MediaReviewer {
             IEnumerable<CardItem> toDecode=display==ReviewView.Thumbnails ? (IEnumerable<CardItem>)cards : focus==null ? new CardItem[0] : new[]{focus};
             foreach(CardItem card in toDecode)if(card.CanLoadImage){if(!loader.QueueThumbnail(card.Record.GroupId,card.Record.ContentId,view.Current,card.Record.PreviewBytes,card.Record.PreviewRevision))break;card.ImageQueued=true;}
             if(Ready){
-                if(gemmaSettingsLoaded)engine.ConfigureGemma(gemmaAvailable,gemmaCpuOnly,gemmaCriteria);
+                if(gemmaSettingsLoaded)engine.ConfigureGemma(gemmaAvailable,gemmaCpuOnly,gemmaCriteria,gemmaSide);
                 Guard(LoadQuickPreview);
                 Guard(LoadPanePreview);
             }

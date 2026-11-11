@@ -7,21 +7,22 @@ namespace MediaReviewer {
     internal sealed class GemmaSession {
         readonly bool cpuOnly;
         readonly string criteria;
+        readonly int side;
         readonly CancellationTokenSource stop=new CancellationTokenSource();
         readonly Task<DraftModelWorker> load;
 
-        internal GemmaSession(bool cpuOnly,string criteria,Task previous){
-            this.cpuOnly=cpuOnly;this.criteria=criteria;
+        internal GemmaSession(bool cpuOnly,string criteria,Task previous,int side=256){
+            this.cpuOnly=cpuOnly;this.criteria=criteria;this.side=side;
             load=Task.Run(async ()=>{
                 if(previous!=null)await previous.ConfigureAwait(false);
                 stop.Token.ThrowIfCancellationRequested();
-                var worker=new DraftModelWorker(true,cpuOnly,criteria);
+                var worker=new DraftModelWorker(true,cpuOnly,criteria,side);
                 try{worker.Prepare(stop.Token);return worker;}
                 catch{worker.Dispose();throw;}
             });
         }
 
-        internal bool Matches(bool cpu,string rubric){return cpuOnly==cpu && criteria==rubric;}
+        internal bool Matches(bool cpu,string rubric,int resolution=256){return cpuOnly==cpu && criteria==rubric && side==resolution;}
         internal bool Failed {get{return load.IsFaulted || load.IsCanceled;}}
         internal bool Ready {get{return load.Status==TaskStatus.RanToCompletion;}}
         internal string Status {
