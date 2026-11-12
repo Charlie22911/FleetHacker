@@ -74,6 +74,7 @@ namespace MediaReviewer {
         void TrackProtectedResult(EvidenceInspection result){lock(vaultResultsGate){if(!vaultUnlocked || result.Epoch!=VaultGeneration){result.Dispose();return;}vaultResults.RemoveAll(x=>x.Metadata==null);if(vaultResults.Count>=16){vaultResults[0].Dispose();vaultResults.RemoveAt(0);}vaultResults.Add(result);}}
         public string RequestVaultLock(){long epoch=InvalidateVault();return EnqueueOperation("VaultLock",(db,t,p)=>{lock(vaultStateGate){if(epoch==VaultGeneration){vaultUnlocked=false;ClearVaultWorker();}}return "Originals locked; secret views cleared.";});}
         public string RequestVaultUnlock(byte[] passwordUtf8,bool createIfMissing){
+            if(!vaultExists && MatchesDatabasePassword(passwordUtf8)){if(passwordUtf8!=null)Array.Clear(passwordUtf8,0,passwordUtf8.Length);throw new ArgumentException("Choose a Supervisor password different from the database password.");}
             if(passwordUtf8==null || passwordUtf8.Length<1 || passwordUtf8.Length>65536){if(passwordUtf8!=null)Array.Clear(passwordUtf8,0,passwordUtf8.Length);throw new ArgumentException("Enter a bounded non-empty password");}
             long epoch=InvalidateVault();
             return EnqueueOperation("VaultUnlock",(db,token,progress)=>{

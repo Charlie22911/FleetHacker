@@ -20,16 +20,18 @@ $watchers=@($app,$temp | ForEach-Object {
     $watcher.EnableRaisingEvents=$true
     [pscustomobject]@{Watcher=$watcher;Id=$id}
 })
-function Invoke-Check([string]$Arguments) {
+function Invoke-Check([string]$Arguments,[string[]]$Passwords) {
     $info = New-Object Diagnostics.ProcessStartInfo
     $info.FileName = $copy
     $info.Arguments = $Arguments
     $info.UseShellExecute = $false
     $info.RedirectStandardError = $true
+    $info.RedirectStandardInput = $Passwords.Count -gt 0
     $info.EnvironmentVariables['TEMP'] = $temp.FullName
     $info.EnvironmentVariables['TMP'] = $temp.FullName
     $info.EnvironmentVariables['DOTNET_BUNDLE_EXTRACT_BASE_DIR'] = $temp.FullName
     $process = [Diagnostics.Process]::Start($info)
+    if($Passwords.Count -gt 0){foreach($password in $Passwords){$process.StandardInput.WriteLine($password)};$process.StandardInput.Close()}
     try {
         $errors = $process.StandardError.ReadToEndAsync()
         if (!$process.WaitForExit(90000)) { $process.Kill(); throw "Timed out: $Arguments" }
@@ -44,8 +46,8 @@ try {
     Invoke-Check $selfTest
     Invoke-Check ('--window-smoke "' + (Join-Path $scratch.FullName 'review.sqlite') + '"')
     $cliDatabase = Join-Path $scratch.FullName 'command-line.sqlite'
-    Invoke-Check ('--create-database "' + $cliDatabase + '"')
-    Invoke-Check ('--database "' + $cliDatabase + '" --scan-root "' + (Join-Path $scratch.FullName 'home-share') + '" --extensions png --full-hash --workers 1')
+    Invoke-Check ('--create-database "' + $cliDatabase + '"') @('generated database password','different supervisor password')
+    Invoke-Check ('--database "' + $cliDatabase + '" --scan-root "' + (Join-Path $scratch.FullName 'home-share') + '" --extensions png --full-hash --workers 1') @('generated database password')
     if($PreviewFixtures){Invoke-Check ('--verify-previews ' + (($PreviewFixtures | ForEach-Object {'"'+(Resolve-Path -LiteralPath $_).Path+'"'}) -join ' '))}
     if($HtmlFixture){
         $original=(Resolve-Path -LiteralPath $HtmlFixture).Path

@@ -27,10 +27,12 @@ namespace MediaReviewer {
             string destination=Paths.LocalDatabase(output);
             if(File.Exists(Paths.Io(destination)))throw new IOException("Import output already exists; choose a new file. Originals are never overwritten.");
             string partial=destination+".importing-"+Guid.NewGuid().ToString("N");
+            SessionPassword password=DatabaseProtection.Find(destination);
             try {
-                ImportLatest(input,partial,token,progress);
-                using(var check=new SqliteConnection(partial,false)){
+                ImportLatest(input,partial,token,progress,password);
+                using(var check=new SqliteConnection(partial,false,password)){
                     token.ThrowIfCancellationRequested();if((string)check.Scalar("PRAGMA integrity_check")!="ok" || check.Query("PRAGMA foreign_key_check",new object[0],1).Count!=0)throw new InvalidDataException("Imported database validation failed");
+                    if(password!=null)DatabaseProtection.RequireDifferentSupervisor(check,password,token);
                     check.Script("PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;");
                 }
                 token.ThrowIfCancellationRequested();File.Move(Paths.Io(partial),Paths.Io(destination));
@@ -38,7 +40,7 @@ namespace MediaReviewer {
             }finally{foreach(string suffix in new[]{"","-wal","-shm","-journal"})try{if(File.Exists(Paths.Io(partial+suffix)))File.Delete(Paths.Io(partial+suffix));}catch(IOException){}catch(UnauthorizedAccessException){}}
         }
         static string Columns(SqliteConnection source,string table){return String.Join(",",source.Query("PRAGMA table_info("+table+")",new object[0],64).Select(x=>(string)x[1]));}
-        static void ImportLatest(string input,string partial,CancellationToken token,Action<string> progress){
+        static void ImportLatest(string input,string partial,CancellationToken token,Action<string> progress,SessionPassword password){
             using(var guard=new FileStream(Paths.Io(input),FileMode.Open,FileAccess.Read,FileShare.Read)){
                 byte[] header=new byte[100];int count=0,n;while(count<header.Length && (n=guard.Read(header,count,header.Length-count))>0)count+=n;
                 if(count!=100 || Encoding.ASCII.GetString(header,0,16)!="SQLite format 3\0")throw new InvalidDataException("Input is not a SQLite database");
@@ -48,7 +50,7 @@ namespace MediaReviewer {
                     if(Convert.ToInt64(source.Scalar("PRAGMA user_version"))!=4 || !Has(source,"app_meta") || !Has(source,"catalog_records"))throw new InvalidDataException("Import supports databases saved by the final HTML build (schema 4). The original remains intact.");
                     object[] workspace=ImportData.Rows(source,"app_meta","value","WHERE key='workspace_json'",token,progress).Single();var ws=ImportData.Object(workspace[0]);
                     if(Number(ws,"schemaVersion")!=1 || Number(ws,"databaseSchemaVersion")!=4 || !Flag(ws,"catalogNormalized") || String.IsNullOrEmpty(Text(ws,"id")))throw new InvalidDataException("Unsupported HTML metadata");
-                    using(var target=new SqliteConnection(partial,false)){
+                    using(var target=new SqliteConnection(partial,false,password)){
                         Catalog.Initialize(target,true);target.Execute("INSERT INTO app_info VALUES('import_state','incomplete')");
                         target.Execute("UPDATE app_info SET value=? WHERE key='workspace_id'",Text(ws,"id"));target.Execute("INSERT INTO app_info VALUES('html_workspace_json',?)",workspace[0]);
                         ImportData.Preserve(workspace,target,"app_info",target.LastId,new[]{"value"});

@@ -8,7 +8,7 @@ namespace MediaReviewer {
             if(File.Exists(Paths.Io(destination)))throw new IOException("Backup destination exists; choose a new file");
             string partial=destination+".partial-"+Guid.NewGuid().ToString("N");
             try {
-                using(var target=new SqliteConnection(partial,false)) {
+                using(var target=new SqliteConnection(partial,false,source.Password)) {
                     target.Script("PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE; PRAGMA cache_size=-2048;");
                     IntPtr handle=Sql.sqlite3_backup_init(target.Handle,Native.Text("main"),source.Handle,Native.Text("main"));
                     if(handle==IntPtr.Zero)throw new DatabaseException(1,Native.Utf8(Sql.sqlite3_errmsg(target.Handle)));

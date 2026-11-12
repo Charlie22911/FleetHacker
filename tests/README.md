@@ -22,6 +22,8 @@ The entry point includes identity-integrity, Smoke, Workflow, Companion, StegoSc
 
 Each unavailable prerequisite is reported as `SKIP`, with its reason. Skipped checks are not counted as passes. A failing suite stops the run and remains recorded in `.build/regression-*/results.json`. Native linking and the complete interactive suite remain release checks; the managed CI job does not replace them.
 
+`Security.ps1` checks generated databases through direct and directory-junction paths. It verifies encrypted database/WAL contents, missing and incorrect passwords, independent Supervisor access, encrypted backups and copies, preserved imported row references, encrypted legacy-import staging, tamper rejection, welcome/setup validation and Evidence locking. All passwords and media in these checks are generated fixtures.
+
 ## Diagnostic symbols
 
 A complete build creates `.build/diagnostic-symbols.zip` separately from the portable executable. It contains the matching PDB and SHA-256 identities for the executable, embedded managed assembly, and symbols. Keep that archive with the exact executable it describes. To diagnose that build, extract its PDB beside the executable, preserving the name `<executable filename>.pdb`, then run:

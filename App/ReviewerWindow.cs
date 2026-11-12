@@ -44,6 +44,8 @@ namespace MediaReviewer {
         long pageCommitVersion;
         long selectionRevision;
         bool advancingSelection;
+        bool pageNumberEdited,settingPageNumber;
+        bool restoringBucket;
         ReviewContinuation reviewContinuation;
         sealed class ReviewContinuation {
             internal long Generation,SelectionRevision,NextId;
@@ -106,10 +108,19 @@ namespace MediaReviewer {
             Click("AiDraftButton",ShowDraftReview);
             Click("FormatsButton",ChooseFormats);Click("OptionsButton",ChooseOptions);
             foreach(FormatFamily family in Formats.Families)Combo("TypeBox").Items.Add(new ComboBoxItem {Content=family.Label,Tag=family.Key});
-            Combo("ViewBox").SelectionChanged+=(s,e)=>{if(Combo("ViewBox").SelectedIndex>=0){bucket=Combo("ViewBox").SelectedIndex;NewPage(1);}};
+            Combo("ViewBox").SelectionChanged+=(s,e)=>{
+                if(restoringBucket || Combo("ViewBox").SelectedIndex<0)return;
+                int requested=Combo("ViewBox").SelectedIndex;
+                if(requested==3 && Ready && !engine.VaultUnlocked){
+                    restoringBucket=true;try{Combo("ViewBox").SelectedIndex=bucket;}finally{restoringBucket=false;}
+                    Guard(()=>Unlock(()=>{if(Ready)Combo("ViewBox").SelectedIndex=3;}));return;
+                }
+                bucket=requested;NewPage(1);
+            };
             Click("FilterButton",()=>NewPage(1));Click("ResetButton",ResetView);
             Click("PreviousButton",()=>NewPage(page-1));Click("NextButton",()=>NewPage(page+1));Click("GoButton",GoToPage);
             Box("PageBox").KeyDown+=(s,e)=>{if(e.Key==Key.Enter){e.Handled=true;Guard(GoToPage);}};
+            Box("PageBox").TextChanged+=(s,e)=>{if(!settingPageNumber)pageNumberEdited=true;};
             Box("SearchBox").KeyDown+=(s,e)=>{if(e.Key==Key.Enter){e.Handled=true;NewPage(1);}};
             Combo("PageSizeBox").SelectionChanged+=(s,e)=>NewPage(1);
             Combo("SortBox").SelectionChanged+=(s,e)=>{columnSort=null;NewPage(1);};
@@ -126,7 +137,7 @@ namespace MediaReviewer {
             }
             Click("ClearNotesButton",()=>Box("NotesBox").Clear());
             Click("RetryPreviewsButton",()=>Work(engine.RequestPreviewRetry(Selected().Select(c=>c.Record.GroupId).ToArray()),"Preview retry"));
-            Click("VaultButton",()=>{if(engine.VaultUnlocked){if(protectedWindow!=null)protectedWindow.Close();Work(engine.RequestVaultLock(),"Lock originals");}else Unlock(null);});
+            Click("VaultButton",()=>{if(engine.VaultUnlocked){if(protectedWindow!=null)protectedWindow.Close();Work(engine.RequestVaultLock(),"Lock Supervisor access");}else Unlock(null);});
             Click("StoredOriginalButton",()=>Original(Selected().Single().Record));
             Click("ExportOriginalButton",()=>ExportOriginal(Selected().Single().Record));
             Click("RetainOriginalsButton",RetainOriginals);
@@ -139,7 +150,7 @@ namespace MediaReviewer {
             Click("RetryPreferencesButton",LoadPreferences);
             Click("ShutdownRetryButton",SaveBeforeClose);
             Click("ShutdownKeepSavedButton",()=>{waitingOnClosePreference=false;engine.CloseAsync();});
-            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and database tools. Use the arrows at the panel edges to collapse or reopen them. Drag the thin preview divider immediately to the left of its arrow to resize it.\n\nDouble-click an item to open Inspect without changing the view. Choose Quick Review in the sidebar for directional review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nSaved previews and database metadata are not encrypted. The originals vault stores encrypted retained originals."));
+            Click("HelpButton",()=>ShowText("Help","Create or open a database on a local drive. Choose a local folder, mapped drive or UNC media source. The sidebar holds the review queues, view modes and database tools. Use the arrows at the panel edges to collapse or reopen them. Drag the thin preview divider immediately to the left of its arrow to resize it.\n\nDouble-click an item to open Inspect without changing the view. Choose Quick Review in the sidebar for directional review. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. Use Details / notes or Inspect for a closer look.\n\nQuick scans common images and video. Deep also includes RAW and AppData. Use Resume scan after a cancellation.\n\nNew databases encrypt saved previews, notes and review data. Use the database password to open the workspace. The separate Supervisor password unlocks retained originals, including Evidence. Earlier unencrypted databases remain readable; use Save encrypted database copy to protect a new copy. Keep passwords safe: there is no password recovery. Original media in source folders and deliberately exported files keep their own protection."));
             Click("AboutButton",About);
             SetUpWorkspace(persistWorkspace);
             SetUpCommandSections();
@@ -199,7 +210,13 @@ namespace MediaReviewer {
 
         internal void Open(string path,bool create) {
             if(closing || closingDatabase!=null || engine!=null && ((!Ready && !engine.Faulted) || status!=null && status.RunningScan || pending.Count!=0 || task!=null))throw new InvalidOperationException("Wait for current work to finish before changing databases.");
-            if(engine==null){StartOpen(path,create,null);return;}
+            bool encrypted=!create && DatabaseProtection.IsEncrypted(path);
+            DatabaseCredentials access=create ? SetupDatabasePasswords(true) : encrypted ? UnlockDatabase(path) : null;
+            if((create || encrypted) && access==null)return;
+            OpenPrepared(path,create,access);
+        }
+        void OpenPrepared(string path,bool create,DatabaseCredentials access) {
+            if(engine==null){StartOpen(path,create,null,access);return;}
             var old=engine;string save=SavePreferences(old);
             if(save!=null){
                 string signature=options.Signature;
@@ -207,37 +224,38 @@ namespace MediaReviewer {
                 Queue(save,r=>{
                     switchingCatalog=false;
                     if(r.Success)preferencesSignature=signature;
-                    if(closing){if(r.Success)SaveBeforeClose();else PreferenceCloseFailed(r.Error);return;}
-                    if(r.Success)SwitchCatalog(old,path,create);
-                    else Message("Could not save preferences. The current database is still open. "+r.Error);
+                    if(closing){if(access!=null)access.Dispose();if(r.Success)SaveBeforeClose();else PreferenceCloseFailed(r.Error);return;}
+                    if(r.Success)SwitchCatalog(old,path,create,access);
+                    else {if(access!=null)access.Dispose();Message("Could not save preferences. The current database is still open. "+r.Error);}
                 });
                 return;
             }
-            SwitchCatalog(old,path,create);
+            SwitchCatalog(old,path,create,access);
         }
 
-        void SwitchCatalog(ReviewerEngine old,string path,bool create) {
+        void SwitchCatalog(ReviewerEngine old,string path,bool create,DatabaseCredentials access) {
             if(inspector!=null)inspector.Close();
             if(protectedWindow!=null)protectedWindow.Close();
             CloseDatabaseWindows();
             closingDatabase=old;engine=null;UpdateControls();Text("ActivityText","Closing the current database…");
             old.CloseAsync();
             var wait=new DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
-            wait.Tick+=(s,e)=>{if(old.Closed){wait.Stop();closingDatabase=null;if(!closing)Guard(()=>StartOpen(path,create,null));}};
+            wait.Tick+=(s,e)=>{if(old.Closed){wait.Stop();closingDatabase=null;if(!closing)Guard(()=>StartOpen(path,create,null,access));else if(access!=null)access.Dispose();}};
             wait.Start();
         }
 
-        void StartOpen(string path,bool create,string html) {
+        void StartOpen(string path,bool create,string html,DatabaseCredentials access=null) {
             if(inspector!=null)inspector.Close();
             if(protectedWindow!=null)protectedWindow.Close();
             ClearCards();ClearWorkspaceNoteDrafts();pending.Clear();undoStack.Clear();view.Advance();page=1;quickIndex=0;bucket=0;revision=-1;status=null;pageRequest=null;
+            pageNumberEdited=false;SetPageNumber();
             Combo("ViewBox").SelectedIndex=0;
             gemmaSide=256;marqoThreshold=DraftReview.DefaultMarqoThreshold;gemmaThreshold=gemmaCustomThreshold=DraftReview.DefaultGemmaThreshold;gemmaCriteria=gemmaCustomCriteria="";useGemma=false;gemmaCpuOnly=false;gemmaSettingsLoaded=false;gemmaAvailable=DraftModelWorker.GemmaAvailable();
             pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
             refresh=true;loadedPreferences=false;preferencesSignature=null;savedPreferences=null;offeredImport=false;
             options.DefaultSourceRoot="";Box("SourceBox").Clear();
-            engine=html==null ? ReviewerEngine.Open(path,create) : ReviewerEngine.ImportHtml(html,path);
-            Text("DatabaseLabel",path);Text("ActivityText",html!=null ? "Importing HTML database…" : "Opening database…");
+            engine=access!=null ? html==null ? ReviewerEngine.OpenProtected(path,create,access) : ReviewerEngine.ImportHtmlProtected(html,path,access) : html==null ? ReviewerEngine.Open(path,create) : ReviewerEngine.ImportHtml(html,path);
+            Text("DatabaseLabel",path+(engine.DatabaseEncrypted ? " · Encrypted" : " · Not encrypted"));Text("ActivityText",html!=null ? "Importing HTML database…" : "Opening database…");
             Text("PreferencesText","Loading saved preferences…");UpdateControls();
         }
 
@@ -289,6 +307,7 @@ namespace MediaReviewer {
             if(!Ready)return;
             pageSearch=Box("SearchBox").Text;pageFolder=Box("FolderBox").Text;
             page=Math.Max(1,target);quickIndex=0;view.Advance();refresh=true;
+            pageNumberEdited=false;SetPageNumber();
             ClearCards();Get<ScrollViewer>("GalleryScroll").ScrollToTop();
         }
 
@@ -309,7 +328,7 @@ namespace MediaReviewer {
         internal void ApplyPage(PageData result) {
             revision=result.Revision;page=result.Page;
             pageCount=(int)Math.Max(1,Math.Min(Int32.MaxValue,(result.Total+result.PageSize-1)/result.PageSize));
-            Box("PageBox").Text=page.ToString(CultureInfo.InvariantCulture);
+            if(!pageNumberEdited)SetPageNumber();
             Text("PageLabel","Page "+page+" of "+pageCount+" · "+result.Total.ToString("N0")+" matching items");
             marqoThreshold=result.MarqoThreshold;gemmaThreshold=result.GemmaThreshold;useGemma=result.UseGemma;gemmaCpuOnly=result.GemmaCpuOnly;gemmaCriteria=result.GemmaCriteria;gemmaSide=result.GemmaSide;gemmaCustomCriteria=result.GemmaCustomCriteria;gemmaCustomThreshold=result.GemmaCustomThreshold;gemmaSettingsLoaded=true;
             Button("Queue4").ToolTip="Suggestions from "+(useGemma ? "Gemma 4 E2B" : "Marqo")+", highest score first by default.";
@@ -352,6 +371,7 @@ namespace MediaReviewer {
         }
 
         void ClearCards(){galleryAnimations.Clear();CancelQuickGesture();ResetQuickPreview();ResetPanePreview();foreach(var card in cards)card.PropertyChanged-=CardChanged;cards.Clear();}
+        void SetPageNumber(){settingPageNumber=true;try{Box("PageBox").Text=page.ToString(CultureInfo.InvariantCulture);}finally{settingPageNumber=false;}}
         void Remove(CardItem card){
             int index=cards.IndexOf(card);
             if(index<0)return;
@@ -487,6 +507,7 @@ namespace MediaReviewer {
             if(closing){ShutdownTick();return;}
             TickStegoPackage();
             if(engine==null)return;
+            if(bucket==3 && !engine.VaultUnlocked){if(protectedWindow!=null)protectedWindow.Close();Combo("ViewBox").SelectedIndex=0;}
             status=engine.Status;
             Text("ActivityText",status.RunningScan ? String.Format("{0} · user {1}/{2} · {3:N0}/{4:N0} file jobs finished · {5:N0} read/listing failures · {8:N0} preview failures · {6:N0} queued · WAL {7:N1} MiB",
                 status.Stage,status.CompletedUsers,status.TotalUsers,status.ProcessedFiles,status.DiscoveredFiles,status.ReadFailures+status.ListingFailures,status.QueueCount,status.WalBytes/1048576.0,status.PreviewFailures) : status.Stage);
@@ -565,7 +586,7 @@ namespace MediaReviewer {
             string undoTip=canUndo ? "Undo last review ("+undoStack[undoStack.Count-1].Items.Length+" item"+(undoStack[undoStack.Count-1].Items.Length==1 ? "" : "s")+") (Ctrl+Z)" : "Undo the last review decision in this session (Ctrl+Z)";
             Button("UndoReviewButton").ToolTip=Button("QuickUndoButton").ToolTip=undoTip;
             Button("CancelWorkButton").Visibility=ready && (stegoTask!=null || task!=null || draftTask!=null) ? Visibility.Visible : Visibility.Collapsed;
-            Button("VaultButton").Content=ready && engine.VaultUnlocked ? "🔒 Lock originals" : "🔑 Unlock originals";
+            Button("VaultButton").Content=ready && engine.VaultUnlocked ? "🔒 Lock Supervisor access" : "🔑 Unlock Supervisor access";
             UpdateWorkspace();
             UpdateStegoControls();
         }

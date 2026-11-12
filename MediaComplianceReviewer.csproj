@@ -18,6 +18,7 @@
     <Compile Remove="steganography/**/*.cs;tests/**/*.cs" />
     <EmbeddedResource Include=".build/Steganography.sha256" LogicalName="Steganography.sha256" Condition="Exists('.build/Steganography.sha256')" />
     <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Security" />
     <Reference Include="System.IO.Compression" />
     <Reference Include="System.Windows.Forms" />
     <EmbeddedResource Include="App/MainWindow.xaml" LogicalName="MainWindow.xaml" />
@@ -26,5 +27,6 @@
     <EmbeddedResource Include="native/COPYING.dav1d" LogicalName="COPYING.dav1d" />
     <EmbeddedResource Include="native/COPYING.draft-ai" LogicalName="COPYING.draft-ai" />
     <EmbeddedResource Include="native/COPYING.gemma-runtime" LogicalName="COPYING.gemma-runtime" />
+    <EmbeddedResource Include="native/COPYING.sqlite3mc" LogicalName="COPYING.sqlite3mc" />
   </ItemGroup>
 </Project>

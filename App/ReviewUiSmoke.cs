@@ -108,7 +108,7 @@ namespace MediaReviewer {
         }
         static void CheckNativeKeyboardAndDrafts(ReviewerWindow controller,string directory){
             if(Native.RuntimeDirectory==null){Console.WriteLine("SKIP native-backed R-key/focus/repeat and unsaved-navigation checks: run --verify-review-ui with the linked Windows executable.");return;}
-            controller.Open(Path.Combine(directory,"generated-keyboard.sqlite"),true);var engine=Field<ReviewerEngine>(controller,"engine");Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);
+            using(var fixture=ReviewerEngine.Open(Path.Combine(directory,"generated-keyboard.sqlite"),true)){Wait(()=>fixture.Ready||fixture.Faulted);}controller.Open(Path.Combine(directory,"generated-keyboard.sqlite"),false);var engine=Field<ReviewerEngine>(controller,"engine");Wait(()=>engine.Ready||engine.Faulted);Check(engine.Ready,engine.Status.Error);
             var owner=controller.Window;var cards=Field<ObservableCollection<CardItem>>(controller,"cards");
             var first=new MediaRow {GroupId=501,ContentId=501,Extension="png",Status="TO_REVIEW",Name="First generated item",RootPath=directory,RelativePath="missing-first.png",Notes="",Reviewer="fixture"};
             var second=new MediaRow {GroupId=502,ContentId=502,Extension="png",Status="TO_REVIEW",Name="Second generated item",RootPath=directory,RelativePath="missing-second.png",Notes="Second saved note",Reviewer="fixture"};
@@ -130,7 +130,7 @@ namespace MediaReviewer {
             lock(Field<object>(engine,"operationGate")){
                 owner.UnregisterName("MessageText");
                 try{
-                    owner.Dispatcher.BeginInvoke(new Action(()=>{var dialog=owner.OwnedWindows.OfType<Window>().Single(w=>w.Title=="Set originals password");foreach(var input in Descendants<PasswordBox>(dialog))input.Password="Generated queued password";Descendants<Button>(dialog).Single(b=>b.IsDefault).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));}));
+                    owner.Dispatcher.BeginInvoke(new Action(()=>{var dialog=owner.OwnedWindows.OfType<Window>().Single(w=>w.Title=="Set Supervisor password");foreach(var input in Descendants<PasswordBox>(dialog))input.Password="Generated queued password";Descendants<Button>(dialog).Single(b=>b.IsDefault).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));}));
                     try{Call(controller,"Unlock",new object[]{null,null});}catch(TargetInvocationException error){failed=error.InnerException is NullReferenceException;}
                     var work=Field<System.Collections.Generic.Dictionary<string,OperationWork>>(engine,"operationStates").Values.Single(x=>x.Progress.Kind=="VaultUnlock");
                     owned=work.Cleanup.Target.GetType().GetFields(BindingFlags.Instance|BindingFlags.Public|BindingFlags.NonPublic).Where(field=>field.FieldType==typeof(byte[])).Select(field=>(byte[])field.GetValue(work.Cleanup.Target)).Single();

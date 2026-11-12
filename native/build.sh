@@ -12,10 +12,7 @@ if [[ ! -f "$sqlite/sqlite3.c" ]]; then python3 -m zipfile -e "$archive" "$work"
 cd "$work"
 printf '101 RCDATA "Application.exe"\n1 24 "../native/application.manifest"\n1 ICON "../native/reviewer.ico"\n' > application.rc
 "$toolchain/x86_64-w64-mingw32-windres" application.rc -O coff -o application.res
-if [[ ! -f sqlite.o || "$sqlite/sqlite3.c" -nt sqlite.o ]]; then
-    "$toolchain/x86_64-w64-mingw32-clang" -O2 -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_THREADSAFE=1 \
-        -c "$sqlite/sqlite3.c" -o sqlite.o
-fi
+source "$root/native/build-database.sh"
 codecs=${MCR_FFMPEG_SOURCE:-"$work/ffmpeg-9.0.2"}
 if [[ ! -f "$codecs/libavformat/libavformat.a" ]]; then
     printf '%s\n' 'Build the static codecs with native/build-codecs.sh before linking.' >&2
@@ -57,7 +54,7 @@ gemma_libraries=("$gemma/win/tools/mtmd/libmtmd.a" "$gemma/win/src/libllama.a" "
     -c "$codecs/libavcodec/libdav1d.c" -o ffmpeg-dav1d.o
 "$toolchain/x86_64-w64-mingw32-clang" -O2 -static -municode -mwindows -I"$codecs" \
     -Wl,--dynamicbase,--nxcompat,--high-entropy-va \
-    "$root/native/host.c" "$root/native/decode.c" "$root/native/playback.c" "$root/native/exports.def" application.res sqlite.o ffmpeg-dav1d.o draft_model.o gemma_draft.o gemma_vulkan_win.o \
+    "$root/native/host.c" "$root/native/decode.c" "$root/native/playback.c" "$root/native/exports.def" application.res sqlite-mc.o ffmpeg-dav1d.o draft_model.o gemma_draft.o gemma_vulkan_win.o \
     -L"$codecs/libavformat" -L"$codecs/libavcodec" -L"$codecs/libswscale" -L"$codecs/libavutil" -L"$codecs/libavfilter" -L"$codecs/libswresample" \
     -Wl,--start-group "$codecs/mcr-cli/libmcr-ffmpeg.a" -lavfilter -lavformat -lavcodec -lswscale -lswresample -lavutil -Wl,--end-group \
     -Wl,--start-group "${ai_libraries[@]}" "${gemma_libraries[@]}" -Wl,--end-group -lc++ -lc++abi -lwinpthread \

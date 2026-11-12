@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 namespace MediaReviewer {
@@ -20,6 +21,28 @@ namespace MediaReviewer {
         static void AttachIfNeeded() {
             var output=GetStdHandle(-11);var error=GetStdHandle(-12);
             if((output==IntPtr.Zero || output==new IntPtr(-1)) && (error==IntPtr.Zero || error==new IntPtr(-1)))AttachConsole(UInt32.MaxValue);
+        }
+        // Redirected input supplies one UTF-8 password per line; secrets never enter process arguments.
+        static byte[] ReadSecret(string prompt){
+            Console.Error.Write(prompt+": ");
+            if(Console.IsInputRedirected){
+                var input=Console.OpenStandardInput();using(var value=new MemoryStream()){
+                    try{
+                    int next;while((next=input.ReadByte())>=0 && next!=10){if(value.Length>=65536)throw new ArgumentException("Password is too long.");value.WriteByte((byte)next);}
+                    byte[] bytes=value.ToArray();
+                    if(bytes.Length>0 && bytes[bytes.Length-1]==13){var trimmed=new byte[bytes.Length-1];Buffer.BlockCopy(bytes,0,trimmed,0,trimmed.Length);Array.Clear(bytes,0,bytes.Length);bytes=trimmed;}
+                    if(Encoding.UTF8.GetCharCount(bytes)<12){Array.Clear(bytes,0,bytes.Length);throw new ArgumentException("Use at least 12 characters for a password.");}return bytes;
+                    }finally{Array.Clear(value.GetBuffer(),0,(int)value.Length);}
+                }
+            }
+            char[] characters=new char[16384];int count=0;
+            try{while(true){var key=Console.ReadKey(true);if(key.Key==ConsoleKey.Enter)break;if(key.Key==ConsoleKey.Backspace){if(count>0)characters[--count]='\0';continue;}if(key.KeyChar!='\0'){if(count==characters.Length)throw new ArgumentException("Password is too long.");characters[count++]=key.KeyChar;}}Console.Error.WriteLine();if(count<12)throw new ArgumentException("Use at least 12 characters for a password.");return Encoding.UTF8.GetBytes(characters,0,count);}finally{Array.Clear(characters,0,characters.Length);}
+        }
+        static ReviewerEngine OpenDatabase(string path,bool create){
+            if(!create && !DatabaseProtection.IsEncrypted(path))return ReviewerEngine.Open(path,false);
+            byte[] password=null,supervisor=null;
+            try{password=ReadSecret(create ? "New database password" : "Database password");if(create)supervisor=ReadSecret("New Supervisor password");return ReviewerEngine.OpenProtected(path,create,new DatabaseCredentials(password,supervisor));}
+            finally{if(password!=null)Array.Clear(password,0,password.Length);if(supervisor!=null)Array.Clear(supervisor,0,supervisor.Length);}
         }
 
         internal static int Run(string[] args) {
@@ -56,14 +79,14 @@ namespace MediaReviewer {
                 return 0;
             }
             if(args.Length==2 && args[0]=="--create-database"){
-                using(var engine=ReviewerEngine.Open(args[1],true)){AwaitReady(engine);Console.WriteLine("Created database · "+engine.DatabasePath);}return 0;
+                using(var engine=OpenDatabase(args[1],true)){AwaitReady(engine);Console.WriteLine("Created encrypted database · "+engine.DatabasePath);}return 0;
             }
             if(args.Length==3 && args[0]=="--import-html"){
-                using(var engine=ReviewerEngine.ImportHtml(args[1],args[2])){AwaitReady(engine);Console.WriteLine("Imported HTML database · "+engine.DatabasePath);}return 0;
+                byte[] password=null,supervisor=null;try{password=ReadSecret("New database password");if(!DatabaseProtection.HasImportedSupervisor(args[1]))supervisor=ReadSecret("New Supervisor password");using(var engine=ReviewerEngine.ImportHtmlProtected(args[1],args[2],new DatabaseCredentials(password,supervisor))){AwaitReady(engine);Console.WriteLine("Imported encrypted Windows database · "+engine.DatabasePath);}}finally{if(password!=null)Array.Clear(password,0,password.Length);if(supervisor!=null)Array.Clear(supervisor,0,supervisor.Length);}return 0;
             }
             if(args.Length<4 || args[0]!="--database")throw new ArgumentException("Invalid command. Use --help for supported arguments.");
             var options=ParseScan(args.Skip(2).ToArray());
-            using(var engine=ReviewerEngine.Open(args[1],false)){
+            using(var engine=OpenDatabase(args[1],false)){
                 AwaitReady(engine);
                 int cancelled=0;
                 ConsoleCancelEventHandler handler=(sender,e)=>{e.Cancel=true;Interlocked.Exchange(ref cancelled,1);};

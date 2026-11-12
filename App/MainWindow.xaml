@@ -411,7 +411,7 @@
           <TextBlock Text="Previews &amp; file matching" Foreground="{DynamicResource MutedBrush}" Margin="3,2"/>
           <WrapPanel><Button x:Name="RetryPreviewsButton" Content="↻ Retry previews"/><Button x:Name="VerifyButton" Content="✓ Verify full match" ToolTip="Read all current source files for this card to verify its full SHA-256"/><Button x:Name="IdentityHistoryButton" Content="Match history"/></WrapPanel>
           <TextBlock Text="Saved originals &amp; Evidence vault" Foreground="{DynamicResource MutedBrush}" Margin="3,5,3,2"/>
-          <WrapPanel><Button x:Name="RetainOriginalsButton" Content="Save original copy" ToolTip="Save encrypted originals for selected Flagged items without changing their reviews"/><Button x:Name="CaptureEvidenceButton" Content="🔒 Move to Evidence"/><Button x:Name="VaultButton" Content="🔑 Unlock originals"/><Button x:Name="StoredOriginalButton" Content="View saved original"/><Button x:Name="ExportOriginalButton" Content="Export original…"/></WrapPanel>
+          <WrapPanel><Button x:Name="RetainOriginalsButton" Content="Save original copy" ToolTip="Save encrypted originals for selected Flagged items without changing their reviews"/><Button x:Name="CaptureEvidenceButton" Content="🔒 Move to Evidence"/><Button x:Name="VaultButton" Content="🔑 Unlock Supervisor access"/><Button x:Name="StoredOriginalButton" Content="View saved original"/><Button x:Name="ExportOriginalButton" Content="Export original…"/></WrapPanel>
         </StackPanel>
       </Expander>
       </StackPanel>

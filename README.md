@@ -6,10 +6,11 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.31-preview/FleetHacker-Windows-0.3.31-Preview.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.32-preview/FleetHacker-Windows-0.3.32-Preview.zip)
+- [Download the smaller update ZIP for an existing Windows folder](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.32-preview/FleetHacker-Windows-0.3.32-Preview-Update.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.31-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the Windows ZIP and keep the two executables together. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.32-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the full Windows ZIP and keep the two executables together. The smaller update ZIP contains the application and source; extract it into an existing Windows folder to retain the optional analysis companion and model files. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -17,7 +18,7 @@ Thanks to Jeremy Gerdes and the Phoenix LAI contributors for their work on local
 
 Open `Media Compliance Reviewer.exe` directly on x64 Windows with .NET Framework 4.7.2 or later. Copy the executable to use the database and manual review tools. SQLite, FFmpeg, dav1d, OpenCV and llama.cpp are statically linked. The application uses Windows-supplied WPF and Windows Imaging Component. Review databases and their SQLite sidecars live at the selected local destination. Optional ZIP previews can use a temporary media file.
 
-The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own database format and opens Windows portable backups read-only. Use the Windows build for AI draft review and access to Evidence stored in Windows databases. [Browser usage and build instructions](browser/README.md)
+The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. It provides offline scanning and manual review in List, Gallery, and Quick Review. The browser uses its own database format and opens older, unencrypted Windows portable backups read-only. Encrypted Windows databases require the Windows application. Use the Windows build for AI draft review and access to Evidence stored in Windows databases. [Browser usage and build instructions](browser/README.md)
 
 ## Optional hidden data analysis
 
@@ -37,7 +38,7 @@ Media scan completion reports fingerprinted and skipped files, file-read and fol
 
 ## Open a database and scan
 
-1. At startup or in the sidebar, choose **Open or create database**. Select an existing SQLite database to open it, or enter a new filename on a local drive to create one. Choose **Later** to skip the startup prompt. When opening a final HTML database, choose a new local filename for the Windows copy.
+1. At the welcome screen, choose **Create database** or **Open database**. A database is required to continue; **Exit** closes the application. Create a new database on a local drive with a confirmed database password and a different confirmed Supervisor password, each at least 12 characters long. Opening an encrypted database asks for its database password. Use the sidebar to change databases later. When importing a final HTML database, choose a new local filename for the Windows copy.
 2. Enter a local folder, mapped drive or UNC media share under **Source root**. In **Maintenance**, use **Use current source path as default** to save it in the database. You can temporarily enter a different path on another machine. Use **Reconnect all sources** to verify a replacement root for previously recorded locations.
 3. Start or resume a scan, then choose a review queue from the sidebar or compact **View** dropdown. New databases scan root-level media and check headers on ordinary files with unknown extensions by default. Change either setting under **Options**. New scans and resumed scans use complete SHA-256 fingerprints. Quick and Deep choose media types; both use full-file hashing. Saved database preferences and resumed scan settings are preserved.
 4. Click a List column to sort the current queue or choose **Thumbnails** for an adjustable grid. Double-click an item to open **Inspect / video** without changing the gallery view. Choose **Quick Review** in the sidebar to review one item at a time. Swipe or drag left for the previous item, right for the next item, up for Compliant, or down for Non-compliant. The arrow keys do the same when the image is focused. A cue appears during a drag when the gesture is ready. Quick Review advances when the decision is saved. Press **C** or **N** outside an editor for the corresponding decision in any view.
@@ -67,7 +68,11 @@ Use **Undo** or **Ctrl+Z** to reverse a recent supported review from the current
 
 Quick Review keeps the same item in focus when a scan reorders the current page. If the item leaves the page, Quick Review displays the item at the previous position or the last item on the page. The gallery updates its cards and counts together and reuses saved previews that have not changed.
 
-Open **Details / notes** on an Evidence item to unlock and read its authenticated capture details. Those details are read-only. The originals password protects the retained capture, including its capture metadata. The database can still contain plaintext review history and source information.
+Opening **Evidence** requires Supervisor access. Open **Details / notes** on an Evidence item to read its authenticated capture details. Those details are read-only. **Lock Supervisor access** closes the protected view and leaves Evidence. Database access and Supervisor access use separate passwords; unlocking the database does not unlock retained originals.
+
+New databases encrypt saved previews, review history, source information and notes. Portable backups and automatic upgrade backups keep the database password. Older unencrypted databases remain readable and are labeled **Not encrypted**. Choose **Maintenance > Save encrypted database copy** to protect a new copy without overwriting the original. Existing retained originals keep their Supervisor password in the copy. Keep both passwords safe: there is no password recovery. Source media and deliberately exported reports or originals keep their own protection. [Database and Supervisor protection](docs/Database-Protection.md)
+
+To change pages, type a page number beside **Previous** and **Next**, then press **Enter** or choose **Jump**. Background scan updates preserve a page number while you edit it.
 
 The left sidebar holds the review queues, view modes, and database tools. Click the integrated border arrow at the middle of the sidebar’s right edge, the preview’s left edge, or the top controls’ bottom edge to collapse or reopen that section. The **View** dropdown remains available when the sidebar is closed. In List or Thumbnails, drag the thin preview divider immediately to the left of its arrow to resize the pane. You can also focus the divider with Tab and use the arrow keys. The app remembers the width when it closes.
 

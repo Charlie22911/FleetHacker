@@ -24,6 +24,7 @@ try{
     Suite 'Managed' {& "$PSScriptRoot/Managed.ps1" -Assembly $Assembly} $managedMissing
     Suite 'IdentityIntegrity' {& "$PSScriptRoot/IdentityIntegrity.ps1" -Executable $script:app} $nativeMissing
     Suite 'Reliability' {& "$PSScriptRoot/Reliability.ps1" -Executable $script:app} $nativeMissing
+    Suite 'Security' {& "$PSScriptRoot/Security.ps1" -Executable $script:app} $desktopMissing
     Suite 'StegoPolicy' {AppCheck '--verify-stego-policy'} $nativeMissing
     Suite 'ReviewUI' {AppCheck '--verify-review-ui'} $desktopMissing
     Suite 'DraftUI' {AppCheck '--verify-draft-ui'} $desktopMissing

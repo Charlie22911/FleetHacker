@@ -9,14 +9,14 @@ $framework=Join-Path $env:WINDIR 'Microsoft.NET/Framework64/v4.0.30319'
 $workPath=if($ManagedOutputDirectory){[IO.Path]::GetFullPath($ManagedOutputDirectory)}else{Join-Path $root '.build'}
 $work=New-Item -ItemType Directory -Force -Path $workPath
 $null=New-Item -ItemType Directory -Force -Path "$root/dist"
-$references=@('System','System.Core','System.Xml','System.Xaml','System.Windows.Forms','System.IO.Compression','System.Runtime.Serialization','System.Web.Extensions' | ForEach-Object { "/r:$framework/$_.dll" })
+$references=@('System','System.Core','System.Security','System.Xml','System.Xaml','System.Windows.Forms','System.IO.Compression','System.Runtime.Serialization','System.Web.Extensions' | ForEach-Object { "/r:$framework/$_.dll" })
 $references+=@('WindowsBase','PresentationCore','PresentationFramework' | ForEach-Object { "/r:$framework/WPF/$_.dll" })
 $sources=@(Get-ChildItem -LiteralPath "$root/Core","$root/App" -Filter *.cs -File | ForEach-Object FullName)
 $pinPath=Join-Path $root '.build/Steganography.sha256'
 if(!(Test-Path -LiteralPath $pinPath)){$pinPath=Join-Path $work.FullName 'Steganography.sha256';[IO.File]::WriteAllText($pinPath,'',[Text.UTF8Encoding]::new($false))}
 if($ReuseCompanion){$pin=([IO.File]::ReadAllText($pinPath)).Trim();if($pin -and (!(Test-Path -LiteralPath "$root/dist/FleetHacker.Steganography.exe") -or (Get-FileHash -LiteralPath "$root/dist/FleetHacker.Steganography.exe" -Algorithm SHA256).Hash.ToLowerInvariant() -ne $pin)){throw 'The existing companion does not match its pinned identity.'}}
 $references+="/resource:$pinPath,Steganography.sha256"
-& "$framework/csc.exe" /nologo /target:exe /platform:x64 /langversion:5 /optimize+ /debug:full /codepage:65001 "/out:$work/Application.exe" "/resource:$root/App/MainWindow.xaml,MainWindow.xaml" "/resource:$root/native/reviewer.ico,Reviewer.ico" "/resource:$root/native/COPYING.LGPLv2.1,COPYING.LGPLv2.1" "/resource:$root/native/COPYING.dav1d,COPYING.dav1d" "/resource:$root/native/COPYING.draft-ai,COPYING.draft-ai" "/resource:$root/native/COPYING.gemma-runtime,COPYING.gemma-runtime" @references @sources
+& "$framework/csc.exe" /nologo /target:exe /platform:x64 /langversion:5 /optimize+ /debug:full /codepage:65001 "/out:$work/Application.exe" "/resource:$root/App/MainWindow.xaml,MainWindow.xaml" "/resource:$root/native/reviewer.ico,Reviewer.ico" "/resource:$root/native/COPYING.LGPLv2.1,COPYING.LGPLv2.1" "/resource:$root/native/COPYING.dav1d,COPYING.dav1d" "/resource:$root/native/COPYING.draft-ai,COPYING.draft-ai" "/resource:$root/native/COPYING.gemma-runtime,COPYING.gemma-runtime" "/resource:$root/native/COPYING.sqlite3mc,COPYING.sqlite3mc" @references @sources
 if($LASTEXITCODE -ne 0){throw 'C# compilation failed.'}
 if($ManagedOnly){Write-Output "Managed assembly and matching symbols: $($work.FullName). Native linking and runtime checks were not run.";return}
 $linuxPath = & wsl.exe -d Ubuntu-24.04 -- wslpath -a -u "$root"

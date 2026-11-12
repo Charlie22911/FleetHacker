@@ -30,6 +30,7 @@ namespace MediaReviewer {
         public string RequestVaultPasswordChange(byte[] currentPassword,byte[] newPassword,string operationId){
             Action clear=()=>{if(currentPassword!=null)Array.Clear(currentPassword,0,currentPassword.Length);if(newPassword!=null)Array.Clear(newPassword,0,newPassword.Length);};
             if(currentPassword==null || currentPassword.Length<1 || currentPassword.Length>65536 || newPassword==null || newPassword.Length<1 || newPassword.Length>65536 || Object.ReferenceEquals(currentPassword,newPassword) || String.IsNullOrEmpty(operationId) || operationId.Length>100){clear();throw new ArgumentException("Enter bounded current and new passwords and a valid operation identifier");}
+            if(MatchesDatabasePassword(newPassword)){clear();throw new ArgumentException("Choose a Supervisor password different from the database password.");}
             long epoch=InvalidateVault();
             return EnqueueOperation("VaultPasswordChange",(db,t,p)=>{
                 lock(vaultStateGate){t.ThrowIfCancellationRequested();if(epoch!=VaultGeneration)throw new OperationCanceledException();ClearVaultWorker();}

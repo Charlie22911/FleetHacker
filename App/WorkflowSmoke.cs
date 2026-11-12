@@ -81,6 +81,13 @@ namespace MediaReviewer {
                     Check(cards.Count==6,"Reviewing within the same bucket must advance without removing the saved item");
                 }else if(mode=="pagination"){
                     ((ComboBox)window.FindName("PageSizeBox")).SelectedItem=20;Wait(()=>cards.Count==20);
+                    var pageEditor=(TextBox)window.FindName("PageBox");
+                    pageEditor.Focus();pageEditor.SelectAll();pageEditor.SelectedText="2";
+                    using(var db=new SqliteConnection(database,true))controller.ApplyPage(Catalog.Page(db,new PageRequest {Page=1,PageSize=20}));
+                    Check(pageEditor.Text=="2","A background page refresh must preserve the number being typed.");
+                    ((Button)window.FindName("GoButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Wait(()=>cards.Count==2);
+                    Check(Field<int>(controller,"page")==2,"Jump must navigate using the edited number.");
+                    ((Button)window.FindName("PreviousButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Wait(()=>cards.Count==20);
                     foreach(var card in cards)card.IsSelected=false;var last=cards[19];var before=cards.Select(c=>c.Record.GroupId).ToArray();last.IsSelected=true;
                     ((Button)window.FindName("CompliantButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Wait(()=>cards.Count==20&&!cards.Contains(last)&&cards.Any(c=>c.IsSelected));

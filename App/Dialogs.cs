@@ -46,17 +46,9 @@ namespace MediaReviewer {
         void CloseDatabaseWindows(){foreach(Window dialog in databaseWindows.ToArray())dialog.Close();}
 
         internal void ShowStartupCatalog(Action<Window> beforeShow=null) {
-            var panel=new StackPanel {Margin=new Thickness(24,22,24,20)};
-            var dialog=Dialog("Welcome to Media Review",panel,525,250);
-            dialog.Icon=Window.Icon;dialog.ShowInTaskbar=false;dialog.ResizeMode=ResizeMode.NoResize;
-            panel.Children.Add(new TextBlock {Text="☀ Welcome to Media Review",FontSize=21,FontWeight=FontWeights.SemiBold,Margin=new Thickness(0,0,0,8)});
-            panel.Children.Add(Label("Pick an existing database to jump right back in, or type a new filename on your computer to start a fresh one."));
-            var actions=Bar();panel.Children.Add(actions);
-            var open=ActionButton("📂 Open or create database…",()=>dialog.DialogResult=true);
-            open.Name="StartupCatalogButton";open.IsDefault=true;actions.Children.Add(open);
-            var later=ActionButton("Maybe later",dialog.Close);later.Name="StartupLaterButton";later.IsCancel=true;actions.Children.Add(later);
+            var dialog=CreateWelcomeWindow();
             if(beforeShow!=null)beforeShow(dialog);
-            if(dialog.ShowDialog()==true)Guard(ChooseDatabase);
+            if(dialog.ShowDialog()!=true && beforeShow==null)Window.Close();
         }
 
         void About() {
@@ -64,6 +56,8 @@ namespace MediaReviewer {
             var actions=Bar();actions.Children.Add(ActionButton("Close",dialog.Close));Dock(panel,actions,System.Windows.Controls.Dock.Bottom);
             var text=new StackPanel();panel.Children.Add(new ScrollViewer {Content=text,VerticalScrollBarVisibility=ScrollBarVisibility.Auto});
             text.Children.Add(Label("Media Compliance Reviewer for Windows\n.NET development build · "+Product.DotNetVersion+" · "+Product.DotNetDate+"\nMade by "+Product.Author+", "+Product.Contributors+"\n"+Product.EventCredit));
+            using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.sqlite3mc"))
+            using(var reader=new StreamReader(resource))text.Children.Add(new Expander {Header="Database encryption · SQLite3 Multiple Ciphers 2.6.1 · MIT",Content=Label("Authenticated ChaCha20-Poly1305 database pages. Source: https://github.com/utelle/SQLite3MultipleCiphers/tree/v2.6.1\n\n"+reader.ReadToEnd())});
             using(var resource=typeof(ReviewerWindow).Assembly.GetManifestResourceStream("COPYING.LGPLv2.1"))
             using(var reader=new StreamReader(resource)) {
                 text.Children.Add(new Expander {Header="SQLite "+Native.SqliteVersion+" · Public domain",Content=Label("SQLite is statically linked. Source: https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip")});
@@ -93,9 +87,10 @@ namespace MediaReviewer {
             if(MessageBox.Show(Window,"A final HTML database was detected. Create a Windows copy for reviewing?","Open HTML database",MessageBoxButton.YesNo)!=MessageBoxResult.Yes)return;
             string destination=SaveFile("SQLite database (*.sqlite)|*.sqlite",Path.GetFileNameWithoutExtension(source)+"-Windows.sqlite");
             if(destination==null)return;
+            var access=SetupDatabasePasswords(!DatabaseProtection.HasImportedSupervisor(source));if(access==null)return;
             var old=engine;engine=null;closingDatabase=old;old.CloseAsync();
             var wait=new System.Windows.Threading.DispatcherTimer {Interval=TimeSpan.FromMilliseconds(100)};
-            wait.Tick+=(s,e)=>{if(old.Closed){wait.Stop();closingDatabase=null;if(!closing)Guard(()=>StartOpen(destination,true,source));}};wait.Start();
+            wait.Tick+=(s,e)=>{if(old.Closed){wait.Stop();closingDatabase=null;if(!closing)Guard(()=>StartOpen(destination,true,source,access));else access.Dispose();}};wait.Start();
         }
 
         void ChooseOptions(){
@@ -161,11 +156,11 @@ namespace MediaReviewer {
             byte[] password=null;
             try {
                 bool create=!engine.VaultExists;
-                password=Password(create ? "Set originals password" : "Unlock stored originals",
-                    create ? "Choose a password for encrypted originals. Keep it somewhere safe." : "Enter the current originals password. Imported HTML Evidence initially uses its saved HTML password.",create);
+                password=Password(create ? "Set Supervisor password" : "Unlock Supervisor access",
+                    create ? "Choose a Supervisor password for retained originals, including Evidence. Keep it separate from your database password." : "Enter the Supervisor password. Imported HTML Evidence initially uses its saved HTML password.",create);
                 if(password==null){if(abandoned!=null)abandoned();return;}
                 string request=engine.RequestVaultUnlock(password,create);password=null;
-                Work(request,"Unlock originals",r=>{
+                Work(request,"Unlock Supervisor access",r=>{
                     if(r.Success){if(complete!=null)complete();}
                     else if(abandoned!=null)abandoned();
                 },true);
@@ -224,7 +219,8 @@ namespace MediaReviewer {
             Menu(menu,"✓ Check database integrity",()=>Work(engine.RequestIntegrity(),"Integrity check"));
             Menu(menu,"🧹 Compact and clean up staging data",()=>Work(engine.RequestDatabaseCleanup(),"Database cleanup"));
             Menu(menu,"📏 Retention limits…",()=>Work(engine.RequestOriginalLimits(),"Read retention limits",r=>RetentionLimits(EvidenceFormat.Json().Deserialize<OriginalStorageLimits>(r.Value))));
-            Menu(menu,"🔑 Change originals password…",ChangePassword);
+            Menu(menu,"🔑 Change Supervisor password…",ChangePassword);
+            Menu(menu,"🔐 Save encrypted database copy…",SaveEncryptedCopy);
             Menu(menu,"📌 Use current source path as default",()=>ChangeDefaultSource(Box("SourceBox").Text.Trim()));
             Menu(menu,"✖ Clear default source path",()=>ChangeDefaultSource(""));
             Menu(menu,"🔗 Sources / reconnect…",ManageSources);
@@ -394,15 +390,15 @@ namespace MediaReviewer {
 
         void ChangePassword() {
             if(!engine.VaultExists)throw new InvalidOperationException("Create an originals vault first.");
-            byte[] current=Password("Current originals password","Enter the current originals password.",false);
+            byte[] current=Password("Current Supervisor password","Enter the Supervisor password.",false);
             if(current==null)return;
             byte[] replacement=null;bool submitted=false;
             try {
-                replacement=Password("New originals password","Choose a new password. Earlier copies keep the password they were saved with.",true);
+                replacement=Password("New Supervisor password","Choose a new password. Earlier copies keep the password they were saved with.",true);
                 if(replacement==null)return;
                 if(protectedWindow!=null)protectedWindow.Close();
                 string request=engine.RequestVaultPasswordChange(current,replacement,Id());submitted=true;
-                Work(request,"Change originals password");
+                Work(request,"Change Supervisor password");
             }finally{if(!submitted){Array.Clear(current,0,current.Length);if(replacement!=null)Array.Clear(replacement,0,replacement.Length);}}
         }
         void ChangeDefaultSource(string path) {

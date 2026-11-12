@@ -273,7 +273,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
         public bool DetectedHtml { get { return detectedHtml; } }
         public string DatabasePath { get { return path; } }
         public StatusSnapshot Status { get { lock(statusGate) { StatusSnapshot copy=status.Copy(); copy.QueueCount=writes.Count+controls.Count+reads.Count+status.PreparedQueueCount; copy.RetainedBytes=writes.Bytes+controls.Bytes+reads.Bytes+results.Bytes+status.RetainedBytes; return copy; } } }
-        ReviewerEngine(string file,bool newDatabase,string importing=null,Func<string,SqliteConnection> backgroundReader=null) { path=file; create=newDatabase; importSource=importing; operationReader=backgroundReader ?? (p=>new SqliteConnection(p,true)); writer=new Thread(WriterMain) { IsBackground=true,Name="MediaReviewer database writer" }; writer.Start(); }
+        ReviewerEngine(string file,bool newDatabase,string importing=null,Func<string,SqliteConnection> backgroundReader=null,DatabaseCredentials access=null) { path=access==null ? Path.GetFullPath(file) : Paths.LocalDatabase(file); create=newDatabase; importSource=importing;credentials=access;operationReader=backgroundReader ?? (p=>new SqliteConnection(p,true));if(access!=null)DatabaseProtection.Register(path,access.Database);writer=new Thread(WriterMain) { IsBackground=true,Name="MediaReviewer database writer" };try{writer.Start();}catch{if(access!=null){DatabaseProtection.Unregister(path,access.Database);access.Dispose();}throw;} }
         public static ReviewerEngine Open(string path,bool create) { return new ReviewerEngine(path,create); }
         public static ReviewerEngine ImportHtml(string input,string output) { return new ReviewerEngine(output,true,input); }
         internal void Update(Action<StatusSnapshot> action) { lock(statusGate) action(status); }
@@ -324,7 +324,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             try {
                 if(!create && importSource==null){
                     path=Paths.Source(path);Update(s=>s.Stage="Checking database format");
-                    if(Interchange.DetectHtml(path,stop.Token)){detectedHtml=true;throw new InvalidDataException("A final HTML database was detected. Choose a new local destination for its Windows copy; the original is preserved.");}
+                    if(credentials==null && Interchange.DetectHtml(path,stop.Token)){detectedHtml=true;throw new InvalidDataException("A final HTML database was detected. Choose a new local destination for its Windows copy; the original is preserved.");}
                 }
                 path=Paths.LocalDatabase(path);
                 if(create && File.Exists(Paths.Io(path))) throw new IOException("Create cannot overwrite an existing file; choose a new database name.");
@@ -332,6 +332,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
                 lease=new FileStream(Paths.Io(path+".mcr-owner"),FileMode.OpenOrCreate,FileAccess.ReadWrite,FileShare.None);
                 if(importSource!=null) Interchange.Import(importSource,path,stop.Token,phase=>Update(s=>{s.Stage=phase;s.LastProgressUtc=DateTime.UtcNow;}));
                 db=new SqliteConnection(path,false); Catalog.Initialize(db,create && importSource==null,stop.Token,p=>Update(s=>{s.Stage=p.Stage;s.LastProgressUtc=p.LastProgressUtc;}));
+                if(create && credentials!=null){if(db.Scalar("SELECT 1 FROM evidence_vault WHERE id=1")==null){if(credentials.Supervisor==null)throw new InvalidOperationException("A Supervisor password is required to finish database setup.");DatabaseProtection.CreateSupervisor(db,credentials.Supervisor);}if(credentials.Supervisor!=null)credentials.Supervisor.Dispose();}
                 stop.Token.ThrowIfCancellationRequested();
                 db.Execute("UPDATE jobs SET state='pending' WHERE state='processing'");
                 db.Execute("UPDATE preview_retry_batches SET state='interrupted' WHERE state IN('queued','running')");db.Execute("UPDATE source_connections SET state='interrupted' WHERE state='checking'");db.Execute("UPDATE source_reconnect_batches SET state='interrupted' WHERE state='running'");
@@ -387,7 +388,7 @@ CREATE TABLE evidence_chunks(decision_key TEXT NOT NULL,chunk_index INTEGER NOT 
             if(closed) return; closing=true;closeStage="Stopping scan workers and preserving resumable checkpoints";results.Close();StopScanner(); JoinScanner();
             closeStage="Stopping background tasks";StopPlayback();StopStegoAnalysis();StopOperations();StopGemma();stop.Cancel(); writes.Close(); controls.Close(); reads.Close();
             closeStage="Finishing queued writes and closing the database writer";if(Thread.CurrentThread!=writer) writer.Join();
-            closeStage="Closing database readers";foreach(Thread reader in readers) if(Thread.CurrentThread!=reader) reader.Join();closeStage="Database closed";closed=true;
+            closeStage="Closing database readers";foreach(Thread reader in readers) if(Thread.CurrentThread!=reader) reader.Join();if(credentials!=null){DatabaseProtection.Unregister(path,credentials.Database);credentials.Dispose();}closeStage="Database closed";closed=true;
         }
         public void CloseAsync() { if(closing) return; var closer=new Thread(Dispose) { IsBackground=true,Name="MediaReviewer shutdown" }; closer.Start(); }
     }

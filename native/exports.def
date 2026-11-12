@@ -14,6 +14,9 @@ EXPORTS
     mcr_gemma_score
     mcr_gemma_close
     sqlite3_libversion
+    sqlite3_key
+    sqlite3mc_config
+    sqlite3mc_config_cipher
     sqlite3_open_v2
     sqlite3_close_v2
     sqlite3_extended_result_codes

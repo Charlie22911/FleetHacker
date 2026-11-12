@@ -33,6 +33,10 @@ namespace MediaReviewer {
         internal DatabaseException(int code,string message):base("SQLite "+code+": "+message) { Code=code; }
     }
     internal static class Sql {
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int sqlite3_key_call(IntPtr db,byte[] key,int length);
+        internal static readonly sqlite3_key_call sqlite3_key=Native.Export<sqlite3_key_call>("sqlite3_key");
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate int sqlite3mc_config_cipher_call(IntPtr db,byte[] cipher,byte[] parameter,int value);
+        internal static readonly sqlite3mc_config_cipher_call sqlite3mc_config_cipher=Native.Export<sqlite3mc_config_cipher_call>("sqlite3mc_config_cipher");
 
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] internal delegate IntPtr sqlite3_libversion_call();
         internal static readonly sqlite3_libversion_call sqlite3_libversion=Native.Export<sqlite3_libversion_call>("sqlite3_libversion");
@@ -119,13 +123,17 @@ namespace MediaReviewer {
     public sealed class SqliteConnection:IDisposable {
         internal IntPtr Handle;
         public string FilePath { get;private set; }
+        internal SessionPassword Password {get;private set;}
         readonly int owner;
-        public SqliteConnection(string path,bool readOnly) {
+        public SqliteConnection(string path,bool readOnly):this(path,readOnly,DatabaseProtection.Find(path)){}
+        internal SqliteConnection(string path,bool readOnly,SessionPassword password) {
             FilePath=Path.GetFullPath(path);
             owner=System.Threading.Thread.CurrentThread.ManagedThreadId;
             int rc=Sql.sqlite3_open_v2(Native.Text(Path.GetFullPath(path)),out Handle,readOnly ? 1 : 2|4,IntPtr.Zero);
             if(rc!=0) { string error=Handle==IntPtr.Zero ? "Cannot open database" : Native.Utf8(Sql.sqlite3_errmsg(Handle)); if(Handle!=IntPtr.Zero) Sql.sqlite3_close_v2(Handle); Handle=IntPtr.Zero; throw new DatabaseException(rc,error); }
             Sql.sqlite3_extended_result_codes(Handle,1); Sql.sqlite3_busy_timeout(Handle,3000);
+            try{Password=password;DatabaseProtection.Key(this,password);Script("PRAGMA temp_store=MEMORY; PRAGMA mmap_size=0; PRAGMA memory_security=ON; PRAGMA secure_delete=ON;");}
+            catch{Sql.sqlite3_close_v2(Handle);Handle=IntPtr.Zero;throw;}
         }
         internal void CheckOwner() { if(Handle==IntPtr.Zero) throw new ObjectDisposedException("SQLite connection"); if(owner!=System.Threading.Thread.CurrentThread.ManagedThreadId) throw new InvalidOperationException("SQLite connection belongs to another worker"); }
         internal bool AutoCommit {get{CheckOwner();return Sql.sqlite3_get_autocommit(Handle)!=0;}}

@@ -47,7 +47,7 @@ namespace MediaReviewer {
             var boundary=typeof(ReviewerWindow).GetMethod("HandleUiFailure",BindingFlags.Instance|BindingFlags.NonPublic);
             Check(boundary!=null,"The UI timer and dispatcher need an explicit recovery boundary");
             using(var controller=new ReviewerWindow(Program.ReadWindow(),false)){
-                controller.Open(Path.Combine(directory,"ui-failure.sqlite"),true);
+                using(var fixture=ReviewerEngine.Open(Path.Combine(directory,"ui-failure.sqlite"),true)){Until(()=>fixture.Ready||fixture.Faulted,"Fixture initialization failed");}controller.Open(Path.Combine(directory,"ui-failure.sqlite"),false);
                 var field=typeof(ReviewerWindow).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic);
                 var engine=(ReviewerEngine)field.GetValue(controller);Until(()=>engine.Ready || engine.Faulted,"UI database did not initialize");
                 Check((bool)boundary.Invoke(controller,new object[]{new PresentationFailureException(new FileFormatException("Malformed preview"))}),"A contained discarded preview failure must recover");
@@ -58,7 +58,7 @@ namespace MediaReviewer {
                 Until(()=>engine.Closed,"UI fail-stop must close owned database work");
             }
             using(var controller=new ReviewerWindow(Program.ReadWindow(),false)){
-                controller.Open(Path.Combine(directory,"ui-result-failure.sqlite"),true);
+                using(var fixture=ReviewerEngine.Open(Path.Combine(directory,"ui-result-failure.sqlite"),true)){Until(()=>fixture.Ready||fixture.Faulted,"Fixture initialization failed");}controller.Open(Path.Combine(directory,"ui-result-failure.sqlite"),false);
                 var engine=(ReviewerEngine)typeof(ReviewerWindow).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(controller);Until(()=>engine.Ready || engine.Faulted,"Result UI database did not initialize");
                 var callbacks=(Dictionary<string,Action<UiResult>>)typeof(ReviewerWindow).GetField("pending",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(controller);
                 callbacks.Add("fault-result",r=>{throw new NullReferenceException("Injected unknown completion callback failure");});
@@ -67,7 +67,7 @@ namespace MediaReviewer {
                 Until(()=>engine.Closed,"Result failure must close owned database work");
             }
             using(var controller=new ReviewerWindow(Program.ReadWindow(),false)){
-                controller.Open(Path.Combine(directory,"ui-action-failure.sqlite"),true);
+                using(var fixture=ReviewerEngine.Open(Path.Combine(directory,"ui-action-failure.sqlite"),true)){Until(()=>fixture.Ready||fixture.Faulted,"Fixture initialization failed");}controller.Open(Path.Combine(directory,"ui-action-failure.sqlite"),false);
                 var engine=(ReviewerEngine)typeof(ReviewerWindow).GetField("engine",BindingFlags.Instance|BindingFlags.NonPublic).GetValue(controller);Until(()=>engine.Ready || engine.Faulted,"Action UI database did not initialize");
                 var guard=typeof(ReviewerWindow).GetMethod("Guard",BindingFlags.Instance|BindingFlags.NonPublic);
                 guard.Invoke(controller,new object[]{new Action(()=>{throw new ArgumentException("Invalid selected action");})});

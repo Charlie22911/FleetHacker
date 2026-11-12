@@ -17,10 +17,10 @@ namespace MediaReviewer {
     static class Smoke {
         const string FixturePassword="generated test password";
         internal static void CheckStartupPrompt(Window dialog) {
-            var buttons=((WrapPanel)((StackPanel)dialog.Content).Children[2]).Children.OfType<Button>().ToArray();
-            Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCatalogButton","StartupLaterButton"}),
-                "The startup prompt must offer one database command and Later.");
-            dialog.Loaded+=(s,e)=>dialog.Dispatcher.BeginInvoke(new Action(()=>buttons[1].RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
+            var buttons=((StackPanel)dialog.Content).Children.OfType<WrapPanel>().Single().Children.OfType<Button>().ToArray();
+            Check(buttons.Select(b=>b.Name).SequenceEqual(new[]{"StartupCreateButton","StartupCatalogButton","StartupExitButton"}),
+                "Welcome must require Create, Open, or Exit, without bypassing database setup.");
+            dialog.Loaded+=(s,e)=>dialog.Dispatcher.BeginInvoke(new Action(()=>buttons[2].RaiseEvent(new RoutedEventArgs(Button.ClickEvent))));
         }
         internal static void CheckCatalogPath(string existing) {
             string unused=Path.Combine(Path.GetDirectoryName(existing),Guid.NewGuid().ToString("N")+".sqlite");
@@ -303,7 +303,7 @@ namespace MediaReviewer {
             inspection.Close();
             bool unlocked=false;
             var prompt=window.Dispatcher.BeginInvoke(new Action(()=>{
-                var dialog=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title=="Unlock stored originals" && w.IsVisible);
+                var dialog=window.OwnedWindows.OfType<Window>().SingleOrDefault(w=>w.Title=="Unlock Supervisor access" && w.IsVisible);
                 if(dialog==null)return;
                 var panel=(StackPanel)dialog.Content;
                 panel.Children.OfType<PasswordBox>().Single().Password=FixturePassword;
