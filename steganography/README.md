@@ -1,6 +1,6 @@
 # Windows hidden data analysis
 
-Place the matching `FleetHacker.Steganography.exe` beside `Media Compliance Reviewer.exe` on x64 Windows 10 or later. The **Hidden data scan** control appears when the file is present. Each application build verifies its companion's SHA-256 before starting it. The companion contains its own Python, Ruby and app-local Microsoft runtime files, model weights, and native Windows Binwalk. It needs no installed interpreter, installer, administrator access, or runtime downloads.
+The Windows beta ZIP includes the matching `FleetHacker.Steganography.exe`. Keep it beside `Media Compliance Reviewer.exe` on x64 Windows 10 or later. The **Hidden data scan** control appears when the file is present. Each application build verifies its companion's SHA-256 before starting it. The companion contains its own Python, Ruby and app-local Microsoft runtime files, model weights, and native Windows Binwalk. It needs no installed interpreter, installer, administrator access, or runtime downloads.
 
 Open **Hidden data scan** and choose **Start scan**. Choose **Scan all unchecked photos** to find unchecked photos across review queues and pages, or **Scan selected photos** to check the captured selection again. Reopen the scan window to update that selection. It uses original PNG, JPEG and BMP bytes, including connected ZIP members. Other photo types receive a not-supported result. Evidence items and retired source locations are excluded.
 
@@ -14,7 +14,7 @@ Weak patterns and current Aletheia model outputs remain saved leads, because no 
 
 Marking a suspect photo Compliant, Non-compliant or Back to review resolves its steganography review flag. Undo restores the flag for that review. A repeated check with the same evidence preserves a completed human review; new evidence or a different analysis package can flag the photo again.
 
-The scan window shows progress and a paged list of photo names and results. Select a row and choose **View result** for a plain-language explanation. **Technical details** contains engine availability and **Export result as JSON**, including raw detector output, model scores, configurations, limitations and fingerprints. Originals and review decisions are unchanged. Results and metadata are not encrypted.
+The scan window shows progress and a paged list of photo names and results. Select a row and choose **View result** for a plain-language explanation. **Technical details** contains engine availability and **Export result as JSON**, including raw detector output, model scores, configurations, limitations and fingerprints. Originals and review decisions are unchanged. Results and metadata are saved in the review database and follow its encryption settings; exported JSON files are plaintext.
 
 ## Coverage and limits
 
@@ -41,7 +41,7 @@ Preparation uses private build directories, Git for Windows with the exact helpe
 
 `prepare-payload.py` hashes every staged file. `package-payload.py` creates the embedded resource. `build.ps1` rejects analysis scripts that differ from the staged manifest. The companion verifies every extracted file against that manifest. Binwalk's build disables its unused Kaleido download feature; signature detection code is unchanged.
 
-Keep the matching third-party source archive with redistributed companion binaries. `prepare-notices.py` collects the file helper's source packages and exact MSYS runtime revision, original engine source, and the source crates gathered by the native build. Runtime and dependency notices are included in the package.
+The matching third-party source archive is included under `Dependencies/` in **FleetHacker-Source-Beta.zip**, separately from the runnable Windows package. Keep that source package available alongside redistributed companion binaries. `prepare-notices.py` collects the file helper's source packages and exact MSYS runtime revision, original engine source, and the source crates gathered by the native build. Runtime and dependency notices are included in the companion.
 
 Tests are under `steganography/tests` and `tests/Steganography.ps1`. Use generated labeled fixtures for payload checks. Ordinary photos without verified labels provide functional coverage, not a detection-rate measurement.
 

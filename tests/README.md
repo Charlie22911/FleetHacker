@@ -28,6 +28,8 @@ Each unavailable prerequisite is reported as `SKIP`, with its reason. Skipped ch
 
 ## Diagnostic symbols
 
+Published beta symbols are in `Diagnostics/` inside **FleetHacker-Source-Beta.zip**. They are not included in the runnable Windows package.
+
 A complete build creates `.build/diagnostic-symbols.zip` separately from the portable executable. It contains the matching PDB and SHA-256 identities for the executable, embedded managed assembly, and symbols. Keep that archive with the exact executable it describes. To diagnose that build, extract its PDB beside the executable, preserving the name `<executable filename>.pdb`, then run:
 
 ```powershell

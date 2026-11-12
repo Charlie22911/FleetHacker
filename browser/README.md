@@ -1,8 +1,8 @@
 # Media Compliance Reviewer WebAssembly
 
-The HTML edition is deprecated. I am focusing development on the [Windows edition](../README.md). Existing HTML releases remain available for legacy use.
+The HTML edition is deprecated. I am focusing development on the [Windows beta](../README.md). This directory retains the browser source and build instructions for reference; the current release does not distribute an HTML application.
 
-Download the `.WebAssembly.html` asset from [FleetHacker Releases](https://github.com/Charlie22911/FleetHacker/releases) and open it in desktop Chrome, Firefox, or Microsoft Edge. The file includes SQLite and media preview decoders compiled to WebAssembly. It runs directly from disk and processes selected files in the browser.
+If you build the HTML edition from the source below, open the resulting file in desktop Chrome, Firefox, or Microsoft Edge. The file includes SQLite and media preview decoders compiled to WebAssembly. It runs directly from disk and processes selected files in the browser.
 
 ## Start a browser review
 

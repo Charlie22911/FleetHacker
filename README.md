@@ -4,13 +4,14 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 ## Downloads
 
-I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
+I am releasing FleetHacker as a Windows beta. The HTML edition is deprecated; its source remains in the repository for reference.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.33-preview/FleetHacker-Windows-0.3.33-Preview.zip)
-- [Download the smaller update ZIP for an existing Windows folder](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.33-preview/FleetHacker-Windows-0.3.33-Preview-Update.zip)
-- [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
+- **[Download FleetHacker for Windows (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.34-beta.1/FleetHacker-Windows-Beta.zip)** — the application, Marqo AI model, hidden-data scanner and help files.
+- **[Download the source package (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.34-beta.1/FleetHacker-Source-Beta.zip)** — project source, dependency source bundles, build instructions and diagnostic symbols. You do not need this package to run FleetHacker.
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.33-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the full Windows ZIP and keep the two executables together. The smaller update ZIP contains the application and source; extract it into an existing Windows folder to retain the optional analysis companion and model files. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+Extract the Windows ZIP into a folder and open **Media Compliance Reviewer.exe**. Keep the two executables and `Marqo-NSFW-384.onnx` together. No source archives are included in the Windows package. To update an existing folder, close FleetHacker and replace the package files; keep your databases and optional Gemma model files. The [beta release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.34-beta.1) has these two downloads. GitHub also supplies automatic repository archives; the complete source package above includes the dependency bundles and matching symbols.
+
+Marqo AI review and hidden-data scanning are ready to use from the Windows package. **Gemma is optional** and uses the separate model downloads below. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -22,7 +23,7 @@ The deprecated HTML edition opens directly in desktop Chrome, Edge, or Firefox. 
 
 ## Optional hidden data analysis
 
-An optional Windows [hidden data analysis package](steganography/README.md) checks all unchecked photos or a selected set with Aletheia color models, zsteg and native Binwalk. High-confidence findings appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Place the matching companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
+The Windows ZIP includes a [hidden data analysis companion](steganography/README.md) that checks all unchecked photos or a selected set with Aletheia color models, zsteg and native Binwalk. High-confidence findings appear in **Steganography**, with evidence confidence, method, detector scores and limitations saved in their notes. Human review resolves each flag; Undo restores it. Keep the included companion beside the application to enable the scan. Aletheia's full Octave/DCI coverage remains partial; the suspicion index is not a probability or a guarantee that an image contains no hidden data.
 
 Automatic classification defaults to 90%. Recovered ZIP archives and PNG/JPEG files that pass structural validation qualify directly. Image validation checks complete boundaries and decoding; PNG also checks chunk CRCs. Current statistical and weak findings remain saved leads at every setting because model outputs are not calibrated confidence percentages.
 
@@ -84,11 +85,11 @@ Moved, deleted or inaccessible source files do not prevent classifying their sav
 
 If a reconnect points to a different folder, start a fresh scan there. **Resume** requires the original source for its saved manifest. When retrying a preview or retaining an original from a full SHA-256 card, the app can try another recorded copy if the preferred source is unavailable. Retention verifies the chosen copy's full SHA-256 before saving it.
 
-This is an unsigned development preview. Use a copy of an existing database for evaluation. SVG files can be indexed and fingerprinted. Windows playback depends on the encoding and installed Windows media components.
+This is an unsigned beta. Use a copy of an existing database for evaluation. SVG files can be indexed and fingerprinted. Windows playback depends on the encoding and installed Windows media components.
 
 ## AI draft check
 
-1. For advanced review, [download both Gemma files](#download-gemma-for-advanced-ai-review). Gemma requires a CPU with AVX2, FMA and F16C and uses more time and memory than Marqo. For Marqo, place `Marqo-NSFW-384.onnx` beside the executable on a local fixed drive.
+1. The Windows package includes Marqo. Keep `Marqo-NSFW-384.onnx` beside the executable on a local fixed drive. For optional advanced review, [download both Gemma files](#download-gemma-for-advanced-ai-review). Gemma requires a CPU with AVX2, FMA and F16C and uses more time and memory than Marqo.
 2. Finish or pause your scan, then choose **AI draft check**. Select a model, choose what to flag, and choose **Save and run**. **Save settings** updates the queue from scores already saved. The database remembers each model's settings, with Marqo as the default when the Gemma pair is unavailable.
 3. Open **AI suggestions** to inspect flagged items, with the highest scores first by default. Use the usual Compliant or Non-compliant controls to make a decision. A saved decision clears the suggestion. The regular **To be reviewed** queue includes all items awaiting a human decision.
 
@@ -139,7 +140,7 @@ For unattended scans, pass `--database PATH --scan-root ROOT` with any desired s
 
 ## Developer build
 
-Extract the source ZIP and open `MediaComplianceReviewer.csproj` to edit the project. The distributable is a native x64 host containing the managed output, so the managed build by itself is an intermediate file. The build uses Windows .NET Framework C# tooling and a developer WSL environment with Bash, OpenSSL, Python 3, curl, tar, make, Ninja, `glslc` and the pinned LLVM-MinGW toolchain. Set `MCR_GLSLC` if the shader compiler is outside the build host's `PATH`. The dependency recipes verify the archives before using them.
+Extract the source package and open `FleetHacker/MediaComplianceReviewer.csproj` to edit the project. Run build commands from `FleetHacker/`. `Dependencies/` contains the bundled companion and encrypted-SQLite source archives; `Diagnostics/` contains the published application's matching symbols. The distributable is a native x64 host containing the managed output, so the managed build by itself is an intermediate file. The build uses Windows .NET Framework C# tooling and a developer WSL environment with Bash, OpenSSL, Python 3, curl, tar, make, Ninja, `glslc` and the pinned LLVM-MinGW toolchain. Set `MCR_GLSLC` if the shader compiler is outside the build host's `PATH`. The dependency recipes verify the archives before using them.
 
 Build the codecs once or after changing their configuration. Then link the application from Windows. The commands assume the Ubuntu-24.04 WSL distribution and the project as the current directory.
 
@@ -153,6 +154,8 @@ wsl.exe -d Ubuntu-24.04 -- bash native/build-gemma.sh
 ```
 
 The [Windows regression guide](tests/README.md) describes the managed CI checks, full Windows test entry point, optional fixtures and matching diagnostic symbols.
+
+Use [package.ps1](package.ps1) to create the separate Windows and source ZIPs from a verified build and clean source commit. [Beta package layout and commands](docs/Packaging.md)
 
 The smoke test copies and renames the executable, checks the database and review lifecycle with generated media, opens the WPF gallery, and checks the application and redirected temp directories for extra files. Pass generated media via `-PreviewFixtures` to test additional formats. Pass `-PlaybackFixtures` with a directory containing a generated `legacy.flv` with audio and a short looping `animated.gif` to check offline playback. Include a generated `audio.webm` with Opus audio to verify WebM playback. Add 6,000 × 1,000 `wide.webp`, 1,000 × 6,000 `tall.webp`, and 4,000 × 4,000 `square.webp` fixtures with simple content to exercise the linked decoder's size bounds.
 

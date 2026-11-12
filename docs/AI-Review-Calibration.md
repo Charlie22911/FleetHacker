@@ -19,7 +19,7 @@ The comparison below uses the same 3,504 held-out images for each setting: 1,704
 | Gemma previous (256 px, More suggestions) | 1,113/1,800 (61.8%) | 19/1,704 (1.1%) |
 | Gemma tuned (1024 px, More suggestions) | 1,640/1,800 (91.1%) | 63/1,704 (3.7%) |
 
-The previous settings are from 0.3.30-preview. Tuned settings are available in 0.3.31-preview. Gemma improves detection with a moderate increase in neutral flags. Marqo reduces neutral flags substantially while missing more positive images. These settings optimize a tradeoff; they do not maximize sensitivity and specificity independently.
+The previous settings are from 0.3.30-preview. The Windows beta includes the tuned settings first introduced in 0.3.31-preview. Gemma improves detection with a moderate increase in neutral flags. Marqo reduces neutral flags substantially while missing more positive images. These settings optimize a tradeoff; they do not maximize sensitivity and specificity independently.
 
 | Tuned setting | Hentai detected | Porn detected | Sexy detected |
 | --- | ---: | ---: | ---: |
