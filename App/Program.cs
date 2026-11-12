@@ -48,11 +48,12 @@ namespace MediaReviewer {
             string[] args=Arguments();
             string mode=args.FirstOrDefault();
             if(mode=="--verify-symbols" && args.Length==1){try{ManagedSmoke.VerifySymbols();Console.WriteLine("Matching native-host symbols include source lines.");return 0;}catch(Exception error){Console.Error.WriteLine(error);return 1;}}
-            bool headless=mode=="--verify-security" || CommandLine.IsHeadless(args) || mode=="--verify-stego-policy" || mode=="--verify-review-ui" || mode=="--verify-preview-memory" || mode=="--verify-reliability" || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
+            bool headless=mode=="--verify-file-properties" || mode=="--verify-security" || CommandLine.IsHeadless(args) || mode=="--verify-stego-policy" || mode=="--verify-review-ui" || mode=="--verify-preview-memory" || mode=="--verify-reliability" || mode=="--verify-workflow" || mode=="--verify-companion" || mode=="--verify-stego" || mode=="--verify-stego-queue" || mode=="--verify-gallery" || mode=="--verify-stego-interface" || mode=="--verify-stego-notes" || mode=="--stego-source-worker";
             string scratch=Path.Combine(Path.GetTempPath(),"MediaComplianceReviewer-"+Guid.NewGuid().ToString("N"));
             try {
                 if(Thread.CurrentThread.GetApartmentState()!=ApartmentState.STA)throw new InvalidOperationException("The desktop entry point needs an STA thread.");
                 Native.Initialize(scratch);
+                if(mode=="--verify-file-properties" && args.Length==2)return FilePropertiesSmoke.Run(args[1]);
                 if(mode=="--verify-security" && args.Length==2)return SecuritySmoke.Run(args[1]);
                 if(mode=="--stego-source-worker" && args.Length==1)return StegoSource.Worker();
                 if(mode=="--preview-worker")return DecoderProgram.Run();

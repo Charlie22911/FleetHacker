@@ -11,14 +11,17 @@ namespace MediaReviewer {
     internal sealed class RetentionSourceException:IOException {
         internal RetentionSourceException(Exception error):base(error.Message,error){}
     }
+    internal sealed class OriginalSourceUnavailableException:IOException {
+        internal OriginalSourceUnavailableException(string message,Exception error):base(message,error){}
+    }
     public sealed class EvidenceInspection:IDisposable {
-        public long GroupId,Epoch,Size; public string Hash; public bool Verified;
+        public long GroupId,Epoch,Size; public string Hash; public bool Verified,Historical;
         public byte[] Metadata,Preview;
         internal string LegacyKey;
         public System.Windows.Media.Imaging.BitmapSource PreviewImage;public string PreviewError;
         public void Dispose(){var metadata=Interlocked.Exchange(ref Metadata,null);var preview=Interlocked.Exchange(ref Preview,null);if(metadata!=null)Array.Clear(metadata,0,metadata.Length);if(preview!=null)Array.Clear(preview,0,preview.Length);PreviewImage=null;}
     }
-    internal sealed class OriginalReceipt {internal string OperationId,Message,Kind="Review";internal long[] GroupIds;internal bool Reconciled,OutputPublished;internal Dictionary<long,long> ReviewRevisions;}
+    internal sealed class OriginalReceipt {internal string OperationId,Message,Warning,Kind="Review";internal long[] GroupIds;internal bool Reconciled,OutputPublished;internal Dictionary<long,long> ReviewRevisions;}
     internal static class EvidenceFormat {
         internal const int ChunkSize=4*1024*1024;
         internal static string Quote(string s){var b=new StringBuilder("\"");foreach(char c in s??""){if(c=='\"' || c=='\\')b.Append('\\').Append(c);else if(c<32){switch(c){case '\b':b.Append("\\b");break;case '\f':b.Append("\\f");break;case '\n':b.Append("\\n");break;case '\r':b.Append("\\r");break;case '\t':b.Append("\\t");break;default:b.Append("\\u").Append(((int)c).ToString("x4"));break;}}else b.Append(c);}return b.Append('"').ToString();}
@@ -26,7 +29,7 @@ namespace MediaReviewer {
         internal static byte[] Aad(string ws,string key,string hash,string purpose,int version,string capture,long size,int count,int index=-1){
             string value="{\"version\":"+version+",\"workspaceId\":"+Quote(ws)+",\"decisionKey\":"+Quote(key)+",\"hash\":"+Quote(hash);
             if(version>=2)value+=",\"purpose\":"+Quote(purpose)+",\"index\":"+(index<0 ? "null" : index.ToString(CultureInfo.InvariantCulture))+",\"count\":"+(index<0 ? "null" : count.ToString(CultureInfo.InvariantCulture));
-            if(version==3)value+=",\"captureId\":"+Quote(capture)+",\"originalSize\":"+size.ToString(CultureInfo.InvariantCulture)+",\"chunkSize\":"+ChunkSize+",\"chunkCount\":"+count;
+            if(version>=3)value+=",\"captureId\":"+Quote(capture)+",\"originalSize\":"+size.ToString(CultureInfo.InvariantCulture)+",\"chunkSize\":"+ChunkSize+",\"chunkCount\":"+count;
             return Encoding.UTF8.GetBytes(value+"}");
         }
         internal static byte[] Random(int n){var b=new byte[n];using(var random=RandomNumberGenerator.Create())random.GetBytes(b);return b;}
@@ -97,6 +100,7 @@ namespace MediaReviewer {
             OriginalStorageLimits.Read(db).CheckProjection(allocated,wal,additional,new DriveInfo(Path.GetPathRoot(path)).AvailableFreeSpace);
         }
         internal void AbandonRequest(string operation,CancellationToken token){
+            while(true){token.ThrowIfCancellationRequested();if(!(bool)WaitWrite(w=>(object)(w.Execute("DELETE FROM historical_evidence WHERE id=(SELECT id FROM historical_evidence WHERE request_id=? AND state<>'complete' LIMIT 1)",operation)>0)))break;}
             // Only the matching unfinished operation is eligible. Each deletion is bounded to one chunk.
             while(true){token.ThrowIfCancellationRequested();bool deleted=(bool)WaitWrite(w=>{var rows=w.Query("SELECT c.id FROM original_captures c WHERE c.request_id=? AND c.state<>'complete' LIMIT 1",new object[]{operation},1);if(rows.Count==0)return false;string id=(string)rows[0][0];Verification.Transaction(w,()=>{w.Execute("UPDATE original_captures SET state='abandoned' WHERE id=?",id);object index=w.Scalar("SELECT chunk_index FROM original_chunks WHERE capture_id=? LIMIT 1",id);if(index!=null)w.Execute("DELETE FROM original_chunks WHERE capture_id=? AND chunk_index=?",id,index);else{w.Execute("DELETE FROM original_targets WHERE capture_id=?",id);w.Execute("DELETE FROM original_captures WHERE id=?",id);}});return true;});if(!deleted)break;}
             WaitWrite(w=>{w.Execute("DELETE FROM original_targets WHERE request_id=?",operation);return null;});
@@ -117,7 +121,7 @@ namespace MediaReviewer {
                 if(!more)return;
             }
         }
-        public string RequestOriginalCleanup(){return EnqueueOperation("OriginalCleanup",(db,t,p)=>{long done=0;while(true){t.ThrowIfCancellationRequested();string request=(string)db.Scalar("SELECT request_id FROM original_captures WHERE state<>'complete' LIMIT 1");if(request==null)break;AbandonRequest(request,t);p(++done,-1,"unfinished requests discarded");}return "Discarded hidden unfinished captures. Completed originals and reviews were retained.";});}
+        public string RequestOriginalCleanup(){return EnqueueOperation("OriginalCleanup",(db,t,p)=>{long done=0;while(true){t.ThrowIfCancellationRequested();string request=(string)db.Scalar("SELECT request_id FROM original_captures WHERE state<>'complete' UNION ALL SELECT request_id FROM historical_evidence WHERE state<>'complete' LIMIT 1");if(request==null)break;AbandonRequest(request,t);p(++done,-1,"unfinished requests discarded");}return "Discarded hidden unfinished captures. Completed originals, historical Evidence and reviews were retained.";});}
         public static void ValidateOriginalRetention(ReviewRequest request){EvidenceFormat.Validate(request);}
         public string RequestOriginalRetention(ReviewRequest request){
             return EnqueueOriginalRetention(request,false);
@@ -133,9 +137,9 @@ namespace MediaReviewer {
             EvidenceFormat.Validate(request);var r=request.Copy();r.GroupIds=r.GroupIds.Distinct().OrderBy(x=>x).ToArray();long epoch=VaultGeneration;
             string resultKind=preserveReview ? "OriginalRetention" : "Review";
             return EnqueueOperation(preserveReview ? "OriginalRetention" : "Capture",(db,token,progress)=>{
-                string payload=preserveReview ? Identity.Digest("retain-existing-v1\n"+String.Join(",",r.GroupIds)) : EvidenceFormat.Payload(r);if((bool)WaitWrite(w=>(object)Verification.Reconciled(w,r.OperationId,payload)))return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Reconciled=true,Message="Previously committed original retention confirmed."};
+                string payload=preserveReview ? Identity.Digest("retain-existing-v1\n"+String.Join(",",r.GroupIds)) : EvidenceFormat.Payload(r);if((bool)WaitWrite(w=>(object)Verification.Reconciled(w,r.OperationId,payload))){int gaps=!preserveReview ? r.GroupIds.Length-Convert.ToInt32(db.Scalar("SELECT COUNT(*) FROM original_targets WHERE request_id=?",r.OperationId)) : 0;return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Reconciled=true,Message="Previously saved review confirmed.",Warning=UnavailableOriginalsWarning(gaps,r.Status=="EVIDENCE")};}
                 RequireVault(epoch,token);WaitWrite(w=>{object old=w.Scalar("SELECT payload_hash FROM original_requests WHERE id=?",r.OperationId);if(old!=null && (string)old!=payload)throw new InvalidOperationException("Operation identifier has a different payload");w.Execute("INSERT OR IGNORE INTO original_requests VALUES(?,?,'staging',?)",r.OperationId,payload,Catalog.Now());return null;});
-                AbandonRequest(r.OperationId,token);int completed=0;
+                AbandonRequest(r.OperationId,token);int completed=0;var unavailable=new Dictionary<long,object[]>();var historical=new Dictionary<long,string>();
                 foreach(long group in r.GroupIds){RequireVault(epoch,token);
                     if(preserveReview && (string)db.Scalar("SELECT status FROM review_groups WHERE id=? AND retired=0",group)!="NON_COMPLIANT")throw new InvalidOperationException("Retain originals is available for current Non-compliant items only. Refresh the selected cards.");
                     if((string)db.Scalar("SELECT status FROM review_groups WHERE id=?",group)=="EVIDENCE" && r.Status!="EVIDENCE")throw new InvalidOperationException("Use the authenticated Evidence reclassification action to leave Evidence.");
@@ -143,19 +147,38 @@ namespace MediaReviewer {
                     var legacy=db.Query("SELECT decision_key,hash,size FROM legacy_original_links WHERE group_id=?",new object[]{group},1);
                     string algorithm=(string)db.Scalar("SELECT c.algorithm FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",group);
                     if(algorithm==null)throw new InvalidOperationException("A selected card was replaced; refresh the page.");
+                    var info=db.Query("SELECT g.content_id,g.legacy_key,c.digest,c.size,g.status,g.reviewed_at,g.review_revision FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1)[0];
+                    if((string)info[4]=="EVIDENCE" && r.Status!="EVIDENCE")throw new InvalidOperationException("Use the authenticated Evidence reclassification action to leave Evidence.");
+                    if(r.ExpectedRevisions!=null && (long)info[6]!=expectedRevision)throw new InvalidOperationException("A selected review changed before its source check. Refresh its card.");
+                    if(!preserveReview && legacy.Count==0 && db.Scalar("SELECT 1 FROM original_links l JOIN original_captures c ON c.id=l.capture_id AND c.state='complete' WHERE l.group_id=? AND c.content_id=?",group,info[0])==null){
+                        try{RequireAvailableOriginal(db,group,info,token);}
+                        catch(OriginalSourceUnavailableException error){
+                            if(r.Status=="EVIDENCE")historical.Add(group,CaptureHistoricalEvidence(db,r,group,info,epoch,token));
+                            unavailable.Add(group,new object[]{group,null,info[0],info[4],info[5],info[6],null,null,null});
+                            WaitWrite(w=>{Catalog.Log(w,"warning","Historical review","","Group "+group+": original unavailable; classified from its saved record. "+error.Message);return null;});
+                            progress(++completed,r.GroupIds.Length,"items prepared");continue;
+                        }
+                    }
                     if(algorithm!="sha256" && legacy.Count==0){
                         var preview=VerifyFullCore(db,group,null,token,progress);
                         if(!preview.CanApply || preview.Outcomes.Count!=1 || preview.Outcomes[0].ExistingGroupId!=0)throw new InvalidOperationException("Resolve this candidate with Verify full before retaining originals; differing contents or an existing full group require an explicit choice.");
                         ResolveIdentityCore(db,preview,Identity.Digest(r.OperationId+"\nverify\n"+group),token,progress);promoted=true;
                     }
-                    var info=db.Query("SELECT g.content_id,g.legacy_key,c.digest,c.size,g.status,g.reviewed_at,g.review_revision FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1)[0];
+                    info=db.Query("SELECT g.content_id,g.legacy_key,c.digest,c.size,g.status,g.reviewed_at,g.review_revision FROM review_groups g JOIN contents c ON c.id=g.content_id WHERE g.id=? AND g.retired=0",new object[]{group},1)[0];
                     if(r.ExpectedRevisions!=null && (long)info[6]!=expectedRevision+(promoted ? 1 : 0))throw new InvalidOperationException("A selected review changed while its identity was being checked; the newer decision was preserved.");
                     string capture=(string)db.Scalar("SELECT l.capture_id FROM original_links l JOIN original_captures c ON c.id=l.capture_id AND c.state='complete' WHERE l.group_id=? AND c.content_id=?",group,info[0]);
                     if(capture!=null || legacy.Count!=0){using(var verified=ReadOriginal(db,group,epoch,token,progress,null)){};}
                     else {
                         var captureReview=r;string notice=null;
                         if(preserveReview){var savedReview=Catalog.Inspector(db,group);captureReview=new ReviewRequest {OperationId=r.OperationId,Reviewer=savedReview.Reviewer,Notes=savedReview.Notes};if(savedReview.TextReadOnly)notice="Capture details contain a bounded snapshot of saved review text. Extended imported text remains preserved in the database.";}
-                        capture=CaptureOriginal(db,captureReview,group,info,epoch,token,progress,notice);
+                        try{capture=CaptureOriginal(db,captureReview,group,info,epoch,token,progress,notice);}
+                        catch(OriginalSourceUnavailableException error){
+                            if(preserveReview)throw;
+                            if(r.Status=="EVIDENCE")historical.Add(group,CaptureHistoricalEvidence(db,r,group,info,epoch,token));
+                            unavailable.Add(group,new object[]{group,null,info[0],info[4],info[5],info[6],null,null,null});
+                            WaitWrite(w=>{Catalog.Log(w,"warning","Historical review","","Group "+group+": original unavailable; classified from its saved record. "+error.Message);return null;});
+                            progress(++completed,r.GroupIds.Length,"items prepared");continue;
+                        }
                     }
                     string saved=capture;WaitWrite(w=>{w.Execute("INSERT INTO original_targets VALUES(?,?,?,?,?,?,?,?,?,?)",r.OperationId,group,saved,info[0],info[4],info[5],info[6],legacy.Count==0 ? null : legacy[0][0],legacy.Count==0 ? null : legacy[0][1],legacy.Count==0 ? null : legacy[0][2]);return null;});progress(++completed,r.GroupIds.Length,"originals prepared");
                 }
@@ -165,10 +188,12 @@ namespace MediaReviewer {
                     RequireVault(epoch,token);if(Verification.Reconciled(w,r.OperationId,payload)){reconciled=true;return;}
                     if(!preserveReview && r.Status=="NON_COMPLIANT")revisions=new Dictionary<long,long>(r.GroupIds.Length);
                     var targets=w.Query("SELECT group_id,capture_id,content_id,previous_status,reviewed_at,review_revision,legacy_key,original_hash,original_size FROM original_targets WHERE request_id=?",new object[]{r.OperationId},200);
-                    if(targets.Count!=r.GroupIds.Length)throw new InvalidDataException("Original preparation is incomplete");
+                    targets.AddRange(unavailable.Values);
+                    if(targets.Count!=r.GroupIds.Length)throw new InvalidDataException("Review preparation is incomplete");
                     foreach(var row in targets){long group=(long)row[0];if(w.Scalar("SELECT 1 FROM review_groups WHERE id=? AND retired=0 AND content_id=? AND status=? AND reviewed_at IS ? AND review_revision=?",group,row[2],row[3],row[4],row[5])==null)throw new InvalidOperationException("A selected review changed during capture; its newer decision was preserved.");
+                        string historicalCapture;if(historical.TryGetValue(group,out historicalCapture) && w.Execute("UPDATE historical_evidence SET state='complete' WHERE id=? AND request_id=? AND group_id=? AND content_id=? AND state='staging'",historicalCapture,r.OperationId,group,row[2])!=1)throw new InvalidDataException("Historical Evidence preparation is incomplete.");
                         if(row[1]!=null){if(w.Scalar("SELECT 1 FROM original_captures WHERE id=? AND state IN('verified','complete')",row[1])==null)throw new InvalidDataException("A prepared original is not verified");w.Execute("UPDATE original_captures SET state='complete' WHERE id=?",row[1]);w.Execute("INSERT INTO original_links VALUES(?,?) ON CONFLICT(group_id) DO UPDATE SET capture_id=excluded.capture_id",group,row[1]);}
-                        else if(w.Scalar("SELECT 1 FROM legacy_original_links WHERE group_id=? AND decision_key=? AND hash=? AND size=?",group,row[6],row[7],row[8])==null)throw new InvalidDataException("The authenticated imported original link changed");
+                        else if(!unavailable.ContainsKey(group) && w.Scalar("SELECT 1 FROM legacy_original_links WHERE group_id=? AND decision_key=? AND hash=? AND size=?",group,row[6],row[7],row[8])==null)throw new InvalidDataException("The authenticated imported original link changed");
                         if(!preserveReview){
                             bool canUndo=revisions!=null && !Catalog.HasExtendedReviewText(w,group);
                             w.Execute("UPDATE review_groups SET status=?,reviewer=?,notes=?,reviewed_at=? WHERE id=?",r.Status,r.Reviewer,r.Notes,Catalog.Now(),group);ImportedFields.Delete(w,"review_groups",group,"notes");ImportedFields.Delete(w,"review_groups",group,"reviewer");
@@ -176,9 +201,18 @@ namespace MediaReviewer {
                             w.Execute("INSERT INTO review_events VALUES(?,?,?,?,?,?,?,?,?)",Guid.NewGuid().ToString(),group,w.Scalar("SELECT legacy_key FROM review_groups WHERE id=?",group),row[3],r.Status,Catalog.Now(),r.Reviewer,r.Notes,r.OperationId);
                         }
                     }
-                    w.Execute("UPDATE original_requests SET state='committed' WHERE id=?",r.OperationId);w.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,payload,Catalog.Now(),Catalog.Bump(w));Catalog.Log(w,"info","Original retention","","Committed "+targets.Count+" verified encrypted originals; operation "+r.OperationId);
-                });return null;});return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Reconciled=reconciled,ReviewRevisions=revisions,Message=preserveReview ? "Committed verified encrypted originals; existing reviews preserved." : "Committed verified encrypted originals."};
+                    w.Execute("UPDATE original_requests SET state='committed' WHERE id=?",r.OperationId);w.Execute("INSERT INTO operations VALUES(?,?,?,?)",r.OperationId,payload,Catalog.Now(),Catalog.Bump(w));Catalog.Log(w,"info","Original retention","","Saved "+targets.Count+" items; "+(targets.Count-unavailable.Count)+" verified retained originals; "+unavailable.Count+" originals unavailable; operation "+r.OperationId);
+                });return null;});return new OriginalReceipt {Kind=resultKind,OperationId=r.OperationId,GroupIds=r.GroupIds,Reconciled=reconciled,ReviewRevisions=revisions,Warning=UnavailableOriginalsWarning(unavailable.Count,r.Status=="EVIDENCE"),Message=preserveReview ? "Committed verified encrypted originals; existing reviews preserved." : unavailable.Count==0 ? "Committed verified encrypted originals." : "Review saved. "+UnavailableOriginalsWarning(unavailable.Count,r.Status=="EVIDENCE")};
             },4096+(r.Notes.Length+r.Reviewer.Length)*2+r.GroupIds.Length*48);
+        }
+        static void RequireAvailableOriginal(SqliteConnection db,long group,object[] info,CancellationToken token){
+            Exception last=null;
+            foreach(var source in Catalog.RecordedSources(db,group,(long)info[0],false,token)){
+                token.ThrowIfCancellationRequested();
+                try{string path=Catalog.PreviewSourcePath((string)source[0],(string)source[1]);using(var lease=ReadRetentionSource(()=>SourceRead.Open(path,(long)info[3],(long)source[3],(string)source[4],token,(string)source[0]))){if(!Archives.IsPath(path))ReadRetentionSource(()=>{lease.Validate();return true;});}return;}
+                catch(RetentionSourceException error){last=error.InnerException;}
+            }
+            throw new OriginalSourceUnavailableException("No current recorded original is accessible. "+(last==null ? "" : last.Message),last);
         }
         string CaptureOriginal(SqliteConnection db,ReviewRequest r,long group,object[] info,long epoch,CancellationToken token,Action<long,long,string> progress,string reviewTextNotice=null){
             long size=(long)info[3];int count=OriginalStorageLimits.Read(db).CheckOriginal(size);Capacity(db,checked(size+size/20+count*4096L+1024*1024));
@@ -191,9 +225,10 @@ namespace MediaReviewer {
                 try{return CaptureFromSource(db,r,group,info,epoch,token,progress,reviewTextNotice,size,count,source,sourcePath);}
                 catch(RetentionSourceException error){last=error.InnerException;}
             }
-            throw new IOException(last==null ? "No current source is available for original retention." :
+            throw new OriginalSourceUnavailableException(last==null ? "No current source is available for original retention." :
                 "No recorded copy could be verified for original retention. "+last.Message,last);
         }
+        static string UnavailableOriginalsWarning(int count,bool evidence=false){return count<=0 ? null : evidence ? count+" historical Evidence record"+(count==1 ? " saved" : "s saved")+"; originals unavailable. Saved details and any previews are protected by the Supervisor password." : count+" saved item"+(count==1 ? " was" : "s were")+" classified; original"+(count==1 ? " is" : "s are")+" unavailable. Reconnect the source, then use Retain originals to save a copy.";}
         static T ReadRetentionSource<T>(Func<T> read) {
             try{return read();}
             catch(Exception error){
@@ -203,6 +238,7 @@ namespace MediaReviewer {
         }
         string CaptureFromSource(SqliteConnection db,ReviewRequest r,long group,object[] info,long epoch,CancellationToken token,
             Action<long,long,string> progress,string reviewTextNotice,long size,int count,object[] source,string sourcePath) {
+            SavedFileProperties properties=null;
             string capture=Guid.NewGuid().ToString("N"),ws=EvidenceFormat.Workspace(db),key=(string)info[1],hash=(string)info[2];
             WaitWrite(w=>{w.Execute("INSERT INTO original_captures(id,request_id,group_id,content_id,decision_key,hash,size,chunk_count,state,created_at) VALUES(?,?,?,?,?,?,?,?,'staging',?)",capture,r.OperationId,group,info[0],key,hash,size,count,Catalog.Now());return null;});
             // A retry reopens the same source and replaces its private staging rows.
@@ -226,6 +262,8 @@ namespace MediaReviewer {
                     sha.TransformFinalBlock(new byte[0],0,0);
                     if(done!=size || EvidenceFormat.Hex(sha.Hash)!=hash)
                         throw new RetentionSourceException(new InvalidDataException("Source bytes no longer match the verified full SHA-256."));
+                    var file=stream as FileStream;properties=file==null ? SavedFileProperties.Archive(sourcePath,size,(long)source[3],(string)source[4]) : FilePropertyCapture.Read(file,sourcePath);
+                    ReadRetentionSource(()=>{lease.Validate();return true;});
                     }finally{Array.Clear(plain,0,plain.Length);}
                 }
             },sourcePath,token);
@@ -236,6 +274,7 @@ namespace MediaReviewer {
             string sourceName=Archives.IsPath((string)source[1]) ? Archives.Split((string)source[1])[1] : (string)source[1];
             var metadata=new Dictionary<string,object> {{"format","media-reviewer-original/v3"},{"groupId",group},{"decisionKey",key},{"capturedAt",Catalog.Now()},{"hashes",new {fullSha256=hash}},{"originalSize",size},{"chunkSize",EvidenceFormat.ChunkSize},{"chunkCount",count},{"captureId",capture},{"name",Path.GetFileName(sourceName)},{"path",(string)source[1]},{"rootPath",(string)source[0]},{"reviewer",r.Reviewer},{"notes",r.Notes}};
             if(reviewTextNotice!=null)metadata.Add("displayNotice",reviewTextNotice);
+            if(properties!=null)metadata.Add("fileProperties",properties);
             if(Archives.IsPath((string)source[1])){var coordinates=Archives.Split((string)source[1]);metadata.Add("archivePath",coordinates[0]);metadata.Add("archiveEntry",coordinates[1]);}
             byte[] bytes=Encoding.UTF8.GetBytes(EvidenceFormat.Json().Serialize(metadata)),metadataIv=EvidenceFormat.Random(12),metadataCipher;try{metadataCipher=Crypto.Encrypt(vaultKey,metadataIv,EvidenceFormat.Aad(ws,key,hash,"metadata",3,capture,size,count),bytes);}finally{Array.Clear(bytes,0,bytes.Length);}
             byte[] previewIv=null,previewCipher=null,preview=(byte[])db.Scalar("SELECT bytes FROM previews WHERE content_id=? AND state='available' AND length(bytes)<=32768",info[0]);
@@ -247,6 +286,7 @@ namespace MediaReviewer {
         public string RequestEvidenceInspect(long groupId){if(groupId<=0)throw new ArgumentException("Choose an original");long epoch=VaultGeneration;return EnqueueOperation("EvidenceInspect",(db,t,p)=>{var result=ReadOriginal(db,groupId,epoch,t,p,null);try{if(result.Preview!=null){try{result.PreviewImage=MediaLoader.Decode(result.Preview,256,t);}catch(Exception error){result.PreviewError="Original verified; saved thumbnail unavailable: "+error.Message;}}RequireVault(epoch,t);return result;}catch{result.Dispose();throw;}});}
         EvidenceInspection ReadOriginal(SqliteConnection db,long group,long epoch,CancellationToken token,Action<long,long,string> progress,Stream output){
             RequireVault(epoch,token);string capture=(string)db.Scalar("SELECT capture_id FROM original_links WHERE group_id=?",group);if(capture!=null)return ReadNativeOriginal(db,capture,group,epoch,token,progress,output,false);
+            string history=HistoricalEvidence.CaptureId(db,group);if(history!=null){if(output!=null)throw new InvalidOperationException("The original is unavailable. This Evidence contains saved historical details and any available preview.");return ReadHistoricalEvidence(db,group,history,epoch,token);}
             var result=ReadLegacyOriginal(db,group,epoch,token,progress,output);try{var links=db.Query("SELECT decision_key,hash,size FROM legacy_original_links WHERE group_id=?",new object[]{group},1);if(links.Count!=0 && ((string)links[0][0]!=result.LegacyKey || (string)links[0][1]!=result.Hash || (long)links[0][2]!=result.Size))throw new InvalidDataException("Authenticated imported original does not match its retained link");return result;}catch{result.Dispose();throw;}
         }
         EvidenceInspection ReadNativeOriginal(SqliteConnection db,string capture,long group,long epoch,CancellationToken token,Action<long,long,string> progress,Stream output,bool staged){
@@ -310,6 +350,7 @@ SELECT key FROM linked WHERE EXISTS(SELECT 1 FROM evidence_manifests WHERE decis
             return EnqueueOperation("OriginalExport",(db,t,p)=>{
                 object prior=db.Scalar("SELECT payload_hash FROM original_exports WHERE id=?",operationId);if(prior!=null && (string)prior!=payload)throw new InvalidOperationException("Operation identifier has a different export payload");
                 RequireVault(epoch,t);using(var verified=ReadOriginal(db,group,epoch,t,p,null)){
+                    if(verified.Historical)throw new InvalidOperationException("The original is unavailable. Export a protected Evidence package to retain the historical record and saved preview.");
                     if((bool)WaitWrite(w=>(object)Verification.Reconciled(w,operationId,payload))){using(var source=File.OpenRead(Paths.Io(target)))VerifyExportFile(source,verified.Hash,verified.Size,t,p);return new OriginalReceipt {Kind="OriginalExport",OperationId=operationId,Reconciled=true,Message="Previously committed original export confirmed."};}
                     WaitWrite(w=>{w.Execute("INSERT INTO original_exports VALUES(?,?,?,'','planned',?) ON CONFLICT(id) DO UPDATE SET state='planned' WHERE original_exports.payload_hash=excluded.payload_hash AND original_exports.state<>'complete'",operationId,payload,target,verified.Hash);return null;});
                     bool created=false,complete=false;string identity=null;

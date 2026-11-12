@@ -713,11 +713,13 @@ namespace MediaReviewer {
                 var capture=new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="EVIDENCE",Reviewer="fixture",Notes="smoke test",GroupIds=new[]{group}};
                 string held=Path.Combine(directory,"held-copy.png");
                 File.Move(alternate,held);
-                Check(!WaitForResult(engine,engine.RequestOriginalRetention(capture)).Success,"An unavailable original must not be published.");
+                Result(engine,engine.RequestOriginalRetention(capture));
                 using(var reader=new SqliteConnection(db,true))
                     Check(reader.Scalar("SELECT id FROM original_captures WHERE request_id=?",capture.OperationId)==null &&
-                        (string)reader.Scalar("SELECT status FROM review_groups WHERE id=?",group)=="COMPLIANT",
-                        "Failed capture left staging rows or changed the saved review.");
+                        (string)reader.Scalar("SELECT status FROM review_groups WHERE id=?",group)=="EVIDENCE",
+                        "Unavailable originals must retain historical Evidence without publishing original bytes.");
+                using(var history=Result(engine,engine.RequestEvidenceInspect(group)).Evidence)Check(history.Historical&&!history.Verified,"An unavailable original must be identified as historical Evidence.");
+                Result(engine,engine.RequestEvidenceReclassify(new ReviewRequest {OperationId=Guid.NewGuid().ToString("N"),Status="COMPLIANT",GroupIds=new[]{group}}));
                 File.Move(held,alternate);
                 capture.OperationId=Guid.NewGuid().ToString("N");
                 Result(engine,engine.RequestOriginalRetention(capture));

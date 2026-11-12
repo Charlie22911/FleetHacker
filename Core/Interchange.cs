@@ -29,6 +29,7 @@ namespace MediaReviewer {
         static readonly string[] EvidenceTables={"evidence_vault","evidence_items","evidence_manifests","evidence_chunks"};
         public static void Export(SqliteConnection source,string output) { Export(source,output,CancellationToken.None,null); }
         internal static void Export(SqliteConnection source,string output,CancellationToken token,Action<string> progress) {
+            if(Has(source,"file_properties") && source.Scalar("SELECT 1 FROM file_properties LIMIT 1")!=null)throw new InvalidOperationException("HTML database export cannot preserve saved file ownership and dates; use a native portable backup.");
             if(source.Scalar("SELECT 1 FROM original_requests LIMIT 1")!=null)throw new InvalidOperationException("HTML export cannot represent native retained originals; use a native portable backup.");
             if(source.Scalar("SELECT 1 FROM identity_runs LIMIT 1")!=null)throw new InvalidOperationException("HTML export cannot represent native verification history; use a native portable backup.");
             if(source.Scalar("SELECT 1 FROM review_group_redirects LIMIT 1")!=null)throw new InvalidOperationException("HTML export cannot represent reviews shared across source roots; use a native portable backup.");

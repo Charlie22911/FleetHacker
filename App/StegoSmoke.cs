@@ -53,7 +53,7 @@ namespace MediaReviewer {
                 db.Execute("UPDATE review_groups SET status='TO_REVIEW' WHERE id=?",group);blocked=false;
                 try{Catalog.SaveStego(db,group,content,new string('0',64),new string('a',64),json,original);}catch(InvalidDataException){blocked=true;}
                 Check(blocked,"Mismatched fingerprints must reject a result");
-                db.Execute("DROP TABLE stego_flags");db.Execute("DROP TABLE stego_runs");db.Execute("PRAGMA user_version=13");Catalog.Initialize(db,false);
+                db.Execute("DROP TABLE historical_evidence");db.Execute("DROP TABLE file_properties");db.Execute("DROP TABLE stego_flags");db.Execute("DROP TABLE stego_runs");db.Execute("PRAGMA user_version=13");Catalog.Initialize(db,false);
                 Check(Convert.ToInt64(db.Scalar("PRAGMA user_version"))==Catalog.SchemaVersion && Convert.ToInt64(db.Scalar("SELECT count(*) FROM stego_runs"))==0 && (string)db.Scalar("SELECT status FROM review_groups WHERE id=?",group)=="TO_REVIEW","Schema 13 upgrade must add history and preserve decisions");
             }
             using(var input=File.OpenRead(original))using(var hash=SHA256.Create())Check(BitConverter.ToString(hash.ComputeHash(input)).Replace("-","").ToLowerInvariant()==digest,"Original photo must remain unchanged");

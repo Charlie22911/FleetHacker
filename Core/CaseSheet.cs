@@ -2,28 +2,25 @@ using System;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
-using System.Security;
-using System.Security.AccessControl;
-using System.Security.Principal;
 using System.Text;
 using System.Threading;
 
 namespace MediaReviewer {
     public sealed partial class ReviewerEngine {
         sealed class RecordedSource {
-            internal string Root,Relative,Identity;
+            internal string Root,Relative,Identity,OccurrenceId;
             internal long Size,Ticks;
             internal string FilePath {get{return Catalog.PreviewSourcePath(Root,Relative);}}
         }
 
         static RecordedSource CurrentSource(SqliteConnection db,MediaRow selected) {
-            var rows=db.Query(@"SELECT s.path,o.path,o.file_identity,o.size,o.modified_ticks
+            var rows=db.Query(@"SELECT s.path,o.path,o.file_identity,o.size,o.modified_ticks,o.id
 FROM review_groups g JOIN group_occurrences o ON o.group_id=g.id JOIN source_roots s ON s.id=o.root_id
 WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND o.root_id=? AND o.path_key=? AND o.superseded=0 LIMIT 1",
                 new object[]{selected.GroupId,selected.ContentId,selected.RootId,Paths.Key(selected.RelativePath??"")},1);
             if(rows.Count==0)throw new InvalidOperationException("This selected location changed or is no longer available. Refresh and select it again.");
             var row=rows[0];
-            return new RecordedSource {Root=(string)row[0],Relative=(string)row[1],Identity=(string)row[2],Size=(long)row[3],Ticks=(long)row[4]};
+            return new RecordedSource {Root=(string)row[0],Relative=(string)row[1],Identity=(string)row[2],Size=(long)row[3],Ticks=(long)row[4],OccurrenceId=(string)row[5]};
         }
 
         static MediaRow SourceSelection(MediaRow row) {
@@ -74,26 +71,22 @@ WHERE g.id=? AND g.content_id=? AND g.retired=0 AND g.status<>'EVIDENCE' AND o.r
                 text.AppendLine("Recorded last write: "+When(source.Ticks));
                 text.AppendLine((review.Algorithm=="sha256" ? "Full SHA-256: " : "Candidate fingerprint (not full-file proof): ")+review.Digest);
                 text.AppendLine("Reviewer: "+review.Reviewer).AppendLine("Reviewed: "+review.ReviewedAt).AppendLine("Notes: "+review.Notes);
+                var saved=FilePropertiesData.Read(db,source.OccurrenceId);
+                text.AppendLine().AppendLine("Saved file properties").AppendLine(saved==null ? "Not recorded. Refresh file properties or rescan the source folder." : saved.Describe(source.FilePath,source.Identity));
                 string owner="Unavailable",created="Unavailable",accessed="Unavailable",availability="";
                 try {
                     using(var file=OpenRecordedSource(source)){
                         token.ThrowIfCancellationRequested();string path=Paths.Io(source.FilePath);
-                        created=When(File.GetCreationTimeUtc(path).Ticks);accessed=When(File.GetLastAccessTimeUtc(path).Ticks);
-                        try{owner=ReadFileOwner(path);}catch(UnauthorizedAccessException){}catch(SecurityException){}catch(IOException){}
+                        var properties=FilePropertyCapture.Read(file,source.FilePath);created=SavedFileProperties.Time(properties.CreatedTicks);accessed=When(File.GetLastAccessTimeUtc(path).Ticks);owner=properties.Owner;
                     }
                 }catch(InvalidOperationException error){availability=error.Message;}catch(UnauthorizedAccessException error){availability=error.Message;}
                 catch(IOException error){availability=error.Message;}catch(System.ComponentModel.Win32Exception error){availability=error.Message;}
-                text.AppendLine().AppendLine("Windows file owner: "+owner).AppendLine("File created: "+created).AppendLine("Last access timestamp: "+accessed);
+                text.AppendLine().AppendLine("Current source check").AppendLine("Windows file owner: "+owner).AppendLine("File created: "+created).AppendLine("Last access timestamp: "+accessed);
                 if(availability.Length!=0)text.AppendLine("Source information unavailable: "+availability);
                 return text.ToString();
             },2048+2L*(selected.RelativePath??"").Length);
         }
 
-        static string ReadFileOwner(string path) {
-            var id=File.GetAccessControl(path,AccessControlSections.Owner).GetOwner(typeof(SecurityIdentifier));
-            if(id==null)return "Unavailable";
-            try{return id.Translate(typeof(NTAccount)).Value;}catch(IdentityNotMappedException){return id.Value;}
-        }
         static string When(long ticks){return ticks>0 && ticks<=DateTime.MaxValue.Ticks ? new DateTime(ticks,DateTimeKind.Utc).ToString("yyyy-MM-dd HH:mm:ss 'UTC'",CultureInfo.InvariantCulture) : "Unavailable";}
     }
 }

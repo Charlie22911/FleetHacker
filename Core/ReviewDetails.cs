@@ -20,9 +20,13 @@ namespace MediaReviewer {
         public long Size {get;set;}public long ModifiedTicks {get;set;}public bool Historical {get;set;}
         public bool OtherCard {get;set;}
         public bool Sampled {get;set;}
+        public string FileIdentity {get;set;}
+        public long GroupId {get;set;}
+        public SavedFileProperties Properties {get;set;}
+        public string FilePropertiesText {get{return Properties==null ? "Ownership and creation date have not been recorded. Refresh file properties or rescan the source folder.\nDate modified: "+SavedFileProperties.Time(ModifiedTicks) : Properties.Describe(FullPath,FileIdentity);}}
         public string CardLabel {get{return !OtherCard ? "This item" : Sampled ? "Candidate" : "Exact match";}}
         public string FullPath {get{return RootPath.TrimEnd('\\')+"\\"+Path;}}
-        internal long Cost {get{return 128+2L*(Id.Length+Path.Length+RootPath.Length);}}
+        internal long Cost {get{return 128+2L*(Id.Length+Path.Length+RootPath.Length+(FileIdentity??"").Length)+(Properties==null ? 0 : Properties.Cost);}}
     }
     public sealed class LocationPage {
         public long GroupId,ContentId;public string NextAfter="";public bool HasMore;public List<LocationRow> Rows=new List<LocationRow>();
@@ -63,7 +67,7 @@ namespace MediaReviewer {
                 var page=new LocationPage {GroupId=group,ContentId=(long)groups[0][0]};long cost=512;
                 // Include the same fingerprint on other ordinary cards without merging their reviews.
                 using(var statement=db.Prepare(@"SELECT substr(CAST(o.id AS BLOB),1,393217),substr(CAST(o.path AS BLOB),1,98302),
- o.size,o.modified_ticks,o.superseded,substr(r.path,1,32768),MIN(o.group_id<>?1)
+ o.size,o.modified_ticks,o.superseded,substr(r.path,1,32768),MIN(o.group_id<>?1),substr(COALESCE(o.file_identity,''),1,1024),COALESCE(MIN(CASE WHEN o.group_id=?1 THEN o.group_id END),MIN(o.group_id))
  FROM group_occurrences o JOIN source_roots r ON r.id=o.root_id
  WHERE o.group_id IN (SELECT ?1 UNION ALL SELECT id FROM review_groups
    WHERE content_id=?2 AND retired=0 AND status<>'EVIDENCE' AND id<>?1)
@@ -72,6 +76,7 @@ namespace MediaReviewer {
                     statement.Bind(group,groups[0][1],after,limit+1);while(statement.Step()){
                         var idBytes=(byte[])statement.Value(0)??new byte[0];var pathBytes=(byte[])statement.Value(1)??new byte[0];if(idBytes.Length>393216 || pathBytes.Length>98301)throw new InvalidOperationException("A recorded location exceeds the display limit; its original data is preserved.");
                         var row=new LocationRow {Id=ReviewUtf8.GetString(idBytes),Path=ReviewUtf8.GetString(pathBytes),Size=(long)statement.Value(2),ModifiedTicks=(long)statement.Value(3),Historical=(long)statement.Value(4)!=0,RootPath=(string)statement.Value(5),OtherCard=(long)statement.Value(6)!=0,Sampled=(long)groups[0][2]!=0};
+                        row.FileIdentity=(string)statement.Value(7);row.GroupId=(long)statement.Value(8);row.Properties=FilePropertiesData.Read(db,row.Id);
                         if(row.Id.Length>131072 || row.Path.Length>32767)throw new InvalidOperationException("A recorded location exceeds the display limit; its original data is preserved.");
                         if(page.Rows.Count==limit || cost+row.Cost+row.Id.Length*2L>2*1024*1024){page.HasMore=true;break;}
                         page.Rows.Add(row);cost+=row.Cost;page.NextAfter=row.Id;

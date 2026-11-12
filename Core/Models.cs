@@ -7,6 +7,9 @@ namespace MediaReviewer {
         public long Size,ModifiedTicks,JobId,BytesRead;
         public int UserOrdinal,AlgorithmVersion=1;
         public bool ReviewConflict;
+        internal bool CollectProperties;
+        internal SavedFileProperties Properties;
+        internal long PreparedCost {get{return RelativePath.Length*2L+512+(Properties==null ? 0 : Properties.Cost);}}
         internal string VerifiedCopySampleHash;
     }
     public sealed class PageRequest {
@@ -47,7 +50,7 @@ namespace MediaReviewer {
         public string PreviewRetryState;
         public string RootId,RootPath,RelativePath,Name,Extension,Hash,Status,Reviewer,Notes,PreviewState,PreviewError,FileIdentity,Algorithm;
         public byte[] PreviewBytes; public int PreviewWidth,PreviewHeight;
-        public bool SourceIsHistorical,OriginalRetained;
+        public bool SourceIsHistorical,OriginalRetained,HistoricalEvidence;
         public string SourcePath { get { return Archives.IsPath(RelativePath) ? System.IO.Path.Combine(RootPath,Archives.Split(RelativePath)[0])+Archives.Separator+Archives.Split(RelativePath)[1] : System.IO.Path.Combine(RootPath,RelativePath); } }
     }
     public sealed class PageData {
@@ -62,7 +65,7 @@ namespace MediaReviewer {
         public long[] Totals=new long[4]; public int Page,PageSize;
     }
     public sealed class UiResult {
-        public string RequestId,Kind,Error,OperationId,Value; public long Generation;
+        public string RequestId,Kind,Error,OperationId,Value,Warning; public long Generation;
         public bool Success,Reconciled; public PageData Page; public long[] GroupIds;
         internal bool ProtectedDetails;
         internal Dictionary<long,long> ReviewRevisions;

@@ -19,7 +19,7 @@ Portable backups and automatic pre-upgrade backups of an encrypted database rema
 
 ## Protection boundaries
 
-The database uses authenticated ChaCha20-Poly1305 page encryption through SQLite3 Multiple Ciphers 2.6.1, with PBKDF2-SHA256 and 600,000 iterations. Retained originals and their capture metadata have a separate AES-256-GCM encryption layer under the Supervisor password. The database password cannot unlock that layer.
+The database uses authenticated ChaCha20-Poly1305 page encryption through SQLite3 Multiple Ciphers 2.6.1, with PBKDF2-SHA256 and 600,000 iterations. Retained originals and their capture metadata have a separate AES-256-GCM encryption layer under the Supervisor password. Historical Evidence snapshots and their saved previews use that separate protection when an original is unavailable. The database password cannot unlock that layer. See [Historical Evidence](Historical-Evidence.md) for viewing, reporting and package exports.
 
 Database encryption covers SQLite database and WAL page contents. SQLite temporary working storage stays in memory. Database passwords are protected in process memory during an open session and cleared after its workers close. Database copies are written to an encrypted destination without a decrypted database staging file.
 

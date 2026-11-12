@@ -52,7 +52,7 @@ namespace MediaReviewer {
                     bool ready=session.Ready && !closingPackage;
                     unlock.IsEnabled=ready && !session.Unlocked && !session.Busy;
                     relock.IsEnabled=ready && session.Unlocked;
-                    export.IsEnabled=ready && session.Unlocked && !session.Busy && list.SelectedItem!=null;
+                    export.IsEnabled=ready && session.Unlocked && !session.Busy && list.SelectedItem!=null && !((PackageItem)list.SelectedItem).Historical;
                     cancel.IsEnabled=ready && session.Busy;
                 };
                 timer.Start();try{window.ShowDialog();}finally{timer.Stop();clear();list.ItemsSource=null;}

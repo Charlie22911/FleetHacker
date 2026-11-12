@@ -100,11 +100,42 @@ namespace MediaReviewer {
                     ((TextBox)window.FindName("SearchBox")).Text="no-generated-image-matches-this";((Button)window.FindName("FilterButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
                     Wait(()=>cards.Count==0&&Field<string>(controller,"pageRequest")==null);
                     Check(!((Button)window.FindName("CompliantButton")).IsEnabled,"Changing the filter during a save must cancel selection continuation");
+                }else if(mode=="offline"){
+                    var engine=Field<ReviewerEngine>(controller,"engine");engine.RequestVaultUnlock(System.Text.Encoding.UTF8.GetBytes("generated offline review password"),true);Wait(()=>engine.VaultUnlocked);
+                    var moved=cards[0].Record;var deleted=cards[1].Record;
+                    File.Move(Catalog.PreviewSourcePath(moved.RootPath,moved.RelativePath),Path.Combine(directory,"moved.png"));File.Delete(Catalog.PreviewSourcePath(deleted.RootPath,deleted.RelativePath));
+                    using(var db=new SqliteConnection(database,false))db.Execute("UPDATE contents SET algorithm='sampled-sha256-v1',digest=?,sampling='generated offline candidate' WHERE id=?",new string('a',64),deleted.ContentId);
+                    ((Button)window.FindName("SelectPageButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Check(cards.All(c=>c.IsSelected),"Select page must include offline saved items.");
+                    ((Button)window.FindName("NonCompliantButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+                    Wait(()=>Field<string>(controller,"task")==null);
+                    Check(cards.Count==0,"Missing originals must not block batch classification of saved items: "+((TextBlock)window.FindName("MessageText")).Text);
+                    Check(((TextBlock)window.FindName("MessageText")).Text.Contains("2")&&((TextBlock)window.FindName("MessageText")).Text.Contains("unavailable"),"Completion must disclose unavailable originals.");
+                    using(var db=new SqliteConnection(database,true)){
+                        Check(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM review_groups WHERE status='NON_COMPLIANT'"))==6,"All selected historical and current items must be classified.");
+                        Check(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM original_links"))==4,"Only accessible, verified originals may be marked retained.");
+                        Check(Convert.ToInt64(db.Scalar("SELECT COUNT(*) FROM file_properties"))==6,"Offline classification must preserve saved ownership and dates.");
+                        Check((string)db.Scalar("SELECT algorithm FROM contents WHERE id=?",deleted.ContentId)=="sampled-sha256-v1","An unavailable saved candidate must not be promoted to a full identity.");
+                    }
+                    ((ComboBox)window.FindName("ViewBox")).SelectedIndex=2;Wait(()=>cards.Count==6);
+                    ((Button)window.FindName("SelectPageButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));((Button)window.FindName("CaptureEvidenceButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Wait(()=>Field<string>(controller,"task")==null);
+                    Check(cards.Count==0,"A mixed batch must retain historical Evidence when originals are missing.");
+                    ((ComboBox)window.FindName("ViewBox")).SelectedIndex=3;Wait(()=>cards.Count==6);
+                    Check(cards.Count(c=>c.Record.HistoricalEvidence)==2,"Evidence cards must identify both historical records.");
+                    foreach(var card in cards)card.IsSelected=false;cards.First(c=>c.Record.HistoricalEvidence).IsSelected=true;
+                    Check(!((Button)window.FindName("ExportOriginalButton")).IsEnabled,"Historical Evidence must disable original export.");
+                    ((Button)window.FindName("StoredOriginalButton")).RaiseEvent(new RoutedEventArgs(Button.ClickEvent));Wait(()=>window.OwnedWindows.OfType<Window>().Any(w=>w.Title=="Historical Evidence"));
+                    var history=window.OwnedWindows.OfType<Window>().Single(w=>w.Title=="Historical Evidence");Smoke.SaveGallery(history,Path.Combine(directory,"historical-evidence.png"));history.Close();
                 }else if(mode=="preview"){
                     Field<WorkspacePreferences>(controller,"workspace").PreviewWidth=600;
+                    ((ColumnDefinition)window.FindName("PreviewColumn")).Width=new GridLength(600);
                     controller.GetType().GetMethod("UpdateControls",BindingFlags.Instance|BindingFlags.NonPublic).Invoke(controller,null);window.UpdateLayout();
                     var detail=window.FindName("PaneDetailImage") as System.Windows.Controls.Image;
-                    Check(detail!=null,"The right pane must have a separate source-resolution image");Wait(()=>detail.Source!=null&&((BitmapSource)detail.Source).PixelWidth>256);
+                    Check(detail!=null,"The right pane must have a separate source-resolution image");
+                    try{Wait(()=>detail.Source!=null&&((BitmapSource)detail.Source).PixelWidth>256);}catch(Exception error){
+                        var stage=(TextBlock)window.FindName("PanePreviewStatus");var pane=(FrameworkElement)window.FindName("PreviewPane");
+                        throw new Exception("Source preview failed: "+stage.Text+" | "+stage.ToolTip+" | pane "+pane.IsVisible+" "+pane.ActualWidth+"x"+pane.ActualHeight+" | desired "+Field<int>(controller,"paneDesired")+" decoded "+Field<int>(controller,"paneDecodeSide")+" | image "+(detail.Source==null ? "none" : ((BitmapSource)detail.Source).PixelWidth.ToString()),error);
+                    }
                     Check(((BitmapSource)detail.Source).PixelWidth>256,"The right pane must decode original detail beyond its thumbnail");
                     var previous=detail.Source;cards[0].IsSelected=false;cards[1].IsSelected=true;cards[1].IsSelected=false;cards[2].IsSelected=true;
                     Check(detail.Source==null,"Changing the preview target must immediately clear the previous source image");

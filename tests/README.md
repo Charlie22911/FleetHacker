@@ -24,6 +24,8 @@ Each unavailable prerequisite is reported as `SKIP`, with its reason. Skipped ch
 
 `Security.ps1` checks generated databases through direct and directory-junction paths. It verifies encrypted database/WAL contents, missing and incorrect passwords, independent Supervisor access, encrypted backups and copies, preserved imported row references, encrypted legacy-import staging, tamper rejection, welcome/setup validation and Evidence locking. All passwords and media in these checks are generated fixtures.
 
+`FileProperties.ps1` uses generated duplicate images to check ownership and creation dates per location, offline persistence, guarded refresh, case sheets, reports, authenticated Evidence metadata, encrypted schema upgrades, archive original retention and the collapsible Details section. It also checks historical classification with retention limits, replay, Supervisor locking, tamper rejection, metadata-only Evidence, reports and protected packages, and later original retention after reconnecting. The Workflow `offline` check uses Select page to classify a mixed batch containing moved, deleted and available originals, including an unavailable saved candidate, and then moves the entire batch into Evidence.
+
 ## Diagnostic symbols
 
 A complete build creates `.build/diagnostic-symbols.zip` separately from the portable executable. It contains the matching PDB and SHA-256 identities for the executable, embedded managed assembly, and symbols. Keep that archive with the exact executable it describes. To diagnose that build, extract its PDB beside the executable, preserving the name `<executable filename>.pdb`, then run:

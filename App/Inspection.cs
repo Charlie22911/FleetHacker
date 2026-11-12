@@ -35,6 +35,12 @@ namespace MediaReviewer {
             var locationPanel=new DockPanel();
             var locationStatus=Label("Loading recorded locations…");Dock(locationPanel,locationStatus,System.Windows.Controls.Dock.Top);
             var locations=new ListView();
+            var propertyBody=new StackPanel();
+            var propertyText=new TextBox {Name="SavedFilePropertiesText",Text="Select a recorded location to view its saved ownership and dates.",IsReadOnly=true,TextWrapping=TextWrapping.Wrap,MinHeight=70,MaxHeight=150,VerticalScrollBarVisibility=ScrollBarVisibility.Auto};propertyBody.Children.Add(propertyText);
+            var propertySection=new Expander {Name="SavedFilePropertiesSection",Header="File properties",Content=propertyBody,IsExpanded=false,Margin=new Thickness(0,6,0,0)};Dock(locationPanel,propertySection,System.Windows.Controls.Dock.Bottom);
+            Button refreshProperties=null;bool propertiesRefreshing=false;
+            Action showProperties=()=>{var selected=locations.SelectedItem as LocationRow;propertyText.Text=selected==null ? "Select a recorded location to view its saved ownership and dates." : selected.FilePropertiesText;if(refreshProperties!=null)refreshProperties.IsEnabled=!propertiesRefreshing && selected!=null && !selected.Historical && !Archives.IsPath(selected.Path) && !String.IsNullOrEmpty(selected.FileIdentity);};
+            locations.SelectionChanged+=(s,e)=>showProperties();
             var locationStyle=new Style(typeof(ListViewItem));
             locationStyle.Setters.Add(new Setter(FrameworkElement.ToolTipProperty,new System.Windows.Data.Binding("FullPath")));
             locations.ItemContainerStyle=locationStyle;
@@ -45,7 +51,8 @@ namespace MediaReviewer {
                 new GridViewColumn {Header="Card",Width=90,DisplayMemberBinding=new System.Windows.Data.Binding("CardLabel")},
                 new GridViewColumn {Header="Historical",Width=76,DisplayMemberBinding=new System.Windows.Data.Binding("Historical")}}};
             locationPanel.Children.Add(locations);panel.Children.Add(locationPanel);
-            panel.SizeChanged+=(s,e)=>{notes.Height=Math.Min(112,Math.Max(24,panel.ActualHeight*.25));controls.MaxHeight=Math.Max(0,panel.ActualHeight-actions.ActualHeight-feedback.ActualHeight-120);};
+            Action fitSections=()=>{notes.Height=Math.Min(112,Math.Max(24,panel.ActualHeight*.25));controls.MaxHeight=Math.Max(80,panel.ActualHeight-actions.ActualHeight-feedback.ActualHeight-120-propertySection.ActualHeight);};
+            panel.SizeChanged+=(s,e)=>fitSections();propertySection.SizeChanged+=(s,e)=>fitSections();
             bool live=true;
             var catalog=engine;
             InspectorData current=null;string cursor="",nextCursor="";Button save=null,next=null,previous=null;
@@ -74,10 +81,16 @@ namespace MediaReviewer {
                     locationsLoading=false;
                     previous.IsEnabled=history.Count>0;
                     if(!r.Success){locationStatus.Text=r.Error;return;}
-                    locations.ItemsSource=r.Locations.Rows;nextCursor=r.Locations.NextAfter;next.IsEnabled=r.Locations.HasMore;
+                    string selectedId=locations.SelectedItem is LocationRow ? ((LocationRow)locations.SelectedItem).Id : null;
+                    locations.ItemsSource=r.Locations.Rows;locations.SelectedItem=r.Locations.Rows.FirstOrDefault(location=>location.Id==selectedId)??r.Locations.Rows.FirstOrDefault();showProperties();nextCursor=r.Locations.NextAfter;next.IsEnabled=r.Locations.HasMore;
                     locationStatus.Text="Recorded locations · "+r.Locations.Rows.Count+" shown"+(r.Locations.HasMore ? " · more on the next page" : "");
                 });
             };
+            refreshProperties=ActionButton("Refresh file properties",()=>Guard(()=>{
+                var selected=locations.SelectedItem as LocationRow;if(selected==null || propertiesRefreshing)return;
+                string request=catalog.RequestFilePropertiesRefresh(selected.GroupId,selected.Id);propertiesRefreshing=true;showProperties();feedback.Text="Reading file ownership and dates…";
+                Work(request,"File properties",r=>{if(!live)return;propertiesRefreshing=false;showProperties();feedback.Text=r.Success ? r.Value : r.Error;if(r.Success)loadLocations();},true);
+            }));refreshProperties.Name="RefreshFilePropertiesButton";refreshProperties.IsEnabled=false;propertyBody.Children.Add(refreshProperties);
             var refreshLocations=new DispatcherTimer(DispatcherPriority.Background,window.Dispatcher){Interval=TimeSpan.FromMilliseconds(750)};
             refreshLocations.Tick+=(s,e)=>{
                 if(!Ready || engine!=catalog || current==null || locationsLoading)return;

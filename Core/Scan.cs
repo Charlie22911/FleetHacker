@@ -254,7 +254,7 @@ namespace MediaReviewer {
                         Retry(()=>{
                             bool archive=Archives.IsPath(job.Path);
                             string name=Path.GetFileName(archive ? Archives.Split(job.Path)[1] : job.Path);
-                            var item=new FileRecord {RootId=rootId,ScanId=id,JobId=job.Id,UserOrdinal=job.User,RelativePath=job.Path,Name=name,Extension=Path.GetExtension(name).TrimStart('.').ToLowerInvariant()};
+                            var item=new FileRecord {CollectProperties=true,RootId=rootId,ScanId=id,JobId=job.Id,UserOrdinal=job.User,RelativePath=job.Path,Name=name,Extension=Path.GetExtension(name).TrimStart('.').ToLowerInvariant()};
                             Action<int> progress=bytes=>engine.Update(s=>{s.BytesRead+=bytes;s.LastProgressUtc=DateTime.UtcNow;});
                             var sniff=options.SniffRenamed && !Formats.Supported(item.Extension) ? options.Extensions : null;
                             record=archive ? Archives.Fingerprint(Full(job.Path),item,buffer,cancellation.Token,progress,options.CutoffUtcTicks,options.RootPath,job.Signature)
@@ -262,7 +262,7 @@ namespace MediaReviewer {
                             if(record!=null)record=MatchCatalogIdentity(record,buffer);
                         },"Fingerprinting",Full(job.Path),job);
                         if(record==null) Finish(job,"skipped",null); else {
-                            prepared.Add(record,record.RelativePath.Length*2+512,cancellation.Token);
+                            prepared.Add(record,record.PreparedCost,cancellation.Token);
                         }
                     } catch(OperationCanceledException) { throw; } catch(Exception error) { Finish(job,"failed",error); }
                     finally { Interlocked.Decrement(ref activeHash); }
@@ -274,7 +274,7 @@ namespace MediaReviewer {
             try {
                 while(!cancellation.IsCancellationRequested) {
                     FileRecord item=prepared.Take(cancellation.Token,25);
-                    if(item!=null) { if(batch.Count==0) first=DateTime.UtcNow; batch.Add(item); bytes+=item.RelativePath.Length*2+512; }
+                    if(item!=null) { if(batch.Count==0) first=DateTime.UtcNow; batch.Add(item); bytes+=item.PreparedCost; }
                     if(batch.Count>0 && (batch.Count>=32 || bytes>=1024*1024 || DateTime.UtcNow-first>TimeSpan.FromMilliseconds(250) || (prepared.Count==0 && Volatile.Read(ref activeHash)==0))) {
                         var current=new List<FileRecord>(batch);lock(reviewMatchGate)Write(db=> { Catalog.PublishBatch(db,current); return null; },bytes); batch.Clear(); bytes=0;
                     }

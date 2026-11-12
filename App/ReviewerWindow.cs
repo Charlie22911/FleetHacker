@@ -441,7 +441,7 @@ namespace MediaReviewer {
                 advancingSelection=true;
                 try{foreach(CardItem card in chosen){card.IsPending=false;if(r.Success){card.IsSelected=false;if(view.Accept(generation) && destination!=BucketKeys[bucket])Remove(card);}}}
                 finally{advancingSelection=false;}
-                Message(r.Success ? "Review saved." : "Review failed. Selection retained. "+r.Error);
+                Message(r.Success ? "Review saved."+(String.IsNullOrEmpty(r.Warning) ? "" : " "+r.Warning) : "Review failed. Selection retained. "+r.Error);
                 if(destination=="EVIDENCE" && r.GroupIds!=null)
                     foreach(var window in ordinaryDetails.Where(pair=>r.GroupIds.Contains(pair.Value)).Select(pair=>pair.Key).ToArray())
                         window.Close();
@@ -579,6 +579,7 @@ namespace MediaReviewer {
             Combo("ViewBox").IsEnabled=ready;
             foreach(string name in new[]{"CompliantButton","NonCompliantButton","UnreviewedButton","RetryPreviewsButton","RetainOriginalsButton","CaptureEvidenceButton","ClearSelectionButton"})Button(name).IsEnabled=ready && count>0;
             foreach(string name in new[]{"VerifyButton","IdentityHistoryButton","StoredOriginalButton","ExportOriginalButton"})Button(name).IsEnabled=ready && count==1;
+            if(count==1 && Selected().Single().Record.HistoricalEvidence)Button("ExportOriginalButton").IsEnabled=false;
             Button("SelectPageButton").IsEnabled=ready && display!=ReviewView.Quick && cards.Any(c=>c.CanSelect);
             Button("ClearSelectionButton").IsEnabled=ready && display!=ReviewView.Quick && count>0;
             bool canUndo=ready && !undoInFlight && undoStack.Count>0 && task==null;

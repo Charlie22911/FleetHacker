@@ -12,7 +12,7 @@ namespace MediaReviewer {
         internal bool Reparse { get { return (Attributes&FileAttributes.ReparsePoint)!=0; } }
     }
     internal sealed class FileStamp {
-        internal long Size,ModifiedTicks; internal string Identity;
+        internal long Size,ModifiedTicks,CreatedTicks; internal string Identity;
         internal bool Same(FileStamp other) { return Size==other.Size && ModifiedTicks==other.ModifiedTicks && Identity==other.Identity; }
     }
     internal sealed class FileChangedException:IOException { internal FileChangedException(string message):base(message){} }
@@ -70,6 +70,7 @@ namespace MediaReviewer {
             }
         }
         static long Ticks(Time time) { return DateTime.FromFileTimeUtc(((long)time.High<<32)|time.Low).Ticks; }
+        static long OptionalTicks(Time time){try{return Ticks(time);}catch(ArgumentOutOfRangeException){return 0;}}
         static Win32Exception Failure(int code,string operation,string path=null) {
             return new Win32Exception(code,operation+(path==null ? "" : " "+Paths.Friendly(path))+": "+new Win32Exception(code).Message);
         }
@@ -99,7 +100,7 @@ namespace MediaReviewer {
         internal static FileStamp Stamp(IntPtr handle) {
             HandleInfo value;
             if(!GetFileInformationByHandle(handle,out value)) throw Failure(Marshal.GetLastWin32Error(),"Cannot read opened file metadata");
-            return new FileStamp { Size=((long)value.SizeHigh<<32)|value.SizeLow,ModifiedTicks=Ticks(value.Write),Identity=IdentityOf(value) };
+            return new FileStamp { Size=((long)value.SizeHigh<<32)|value.SizeLow,ModifiedTicks=Ticks(value.Write),CreatedTicks=OptionalTicks(value.Creation),Identity=IdentityOf(value) };
         }
         static string IdentityOf(HandleInfo info){return info.Volume.ToString("x8")+":"+info.IndexHigh.ToString("x8")+info.IndexLow.ToString("x8");}
         internal static bool Transient(Exception error) {
@@ -171,6 +172,7 @@ namespace MediaReviewer {
                     }
                     token.ThrowIfCancellationRequested();hash.TransformFinalBlock(new byte[0],0,0);FileStamp after=Stamp(stream);
                     if(total!=expected || !before.Same(after)) throw new FileChangedException("Source changed during fingerprinting or a read was incomplete.");
+                    if(record.CollectProperties){record.Properties=FilePropertyCapture.Read(stream,path);if(!before.Same(Stamp(stream)))throw new FileChangedException("Source changed while reading file properties.");}
                     record.Size=before.Size;record.ModifiedTicks=before.ModifiedTicks;record.FileIdentity=before.Identity;record.BytesRead=total;
                     record.Algorithm=sampled ? "sampled-sha256-v1" : "sha256";record.AlgorithmVersion=1;record.Sampling=sampled ? policy.Parameters : "";
                     record.Hash=(sampled ? "q2:" : "")+BitConverter.ToString(hash.Hash).Replace("-","").ToLowerInvariant();return record;

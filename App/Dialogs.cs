@@ -188,16 +188,16 @@ namespace MediaReviewer {
 
         void Original(MediaRow row) {
             if(!engine.VaultUnlocked){Unlock(()=>Original(row));return;}
-            Work(engine.RequestEvidenceInspect(row.GroupId),"Verify stored original",r=>{
+            Work(engine.RequestEvidenceInspect(row.GroupId),"Open saved Evidence",r=>{
                 if(protectedWindow!=null)protectedWindow.Close();
                 var content=new DockPanel {Margin=new Thickness(16)};
-                var dialog=Dialog("Stored original",content,740,560);protectedWindow=dialog;
+                var dialog=Dialog(r.Evidence.Historical ? "Historical Evidence" : "Stored original",content,740,560);protectedWindow=dialog;
                 dialog.Closed+=(s,e)=>{content.Children.Clear();if(protectedWindow==dialog)protectedWindow=null;};
                 var metadata=Editor(EvidencePackageSession.Describe(r.Evidence));metadata.IsReadOnly=true;metadata.TextWrapping=TextWrapping.Wrap;
                 metadata.VerticalScrollBarVisibility=ScrollBarVisibility.Auto;metadata.MaxHeight=180;
                 Dock(content,metadata,System.Windows.Controls.Dock.Top);
                 var actions=Bar();Dock(content,actions,System.Windows.Controls.Dock.Bottom);
-                actions.Children.Add(ActionButton("Export original…",()=>Guard(()=>ExportOriginal(row))));actions.Children.Add(ActionButton("Close",dialog.Close));
+                var exportOriginal=ActionButton("Export original…",()=>Guard(()=>ExportOriginal(row)));exportOriginal.IsEnabled=!r.Evidence.Historical;actions.Children.Add(exportOriginal);actions.Children.Add(ActionButton("Close",dialog.Close));
                 if(r.Evidence.PreviewImage!=null)content.Children.Add(new Image {Source=r.Evidence.PreviewImage,Stretch=Stretch.Uniform});
                 else content.Children.Add(Label(r.Evidence.PreviewError??"No stored preview available."));
                 dialog.Show();

@@ -6,11 +6,11 @@ Media Compliance Reviewer for Windows is an offline C#/.NET desktop tool for fin
 
 I am deprecating the HTML edition while I focus development on Windows. Existing HTML releases remain available as legacy downloads.
 
-- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.32-preview/FleetHacker-Windows-0.3.32-Preview.zip)
-- [Download the smaller update ZIP for an existing Windows folder](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.32-preview/FleetHacker-Windows-0.3.32-Preview-Update.zip)
+- [Download the current Windows preview (.zip)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.33-preview/FleetHacker-Windows-0.3.33-Preview.zip)
+- [Download the smaller update ZIP for an existing Windows folder](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.33-preview/FleetHacker-Windows-0.3.33-Preview-Update.zip)
 - [Download the legacy HTML edition (.html, deprecated)](https://github.com/Charlie22911/FleetHacker/releases/download/v0.3.23-preview/Media.Compliance.Reviewer.0.3.23-preview.WebAssembly.html)
 
-The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.32-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the full Windows ZIP and keep the two executables together. The smaller update ZIP contains the application and source; extract it into an existing Windows folder to retain the optional analysis companion and model files. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
+The [Windows preview release](https://github.com/Charlie22911/FleetHacker/releases/tag/v0.3.33-preview) includes the portable application, optional hidden data analysis companion, and source archives. Extract the full Windows ZIP and keep the two executables together. The smaller update ZIP contains the application and source; extract it into an existing Windows folder to retain the optional analysis companion and model files. See the [FleetHacker overview presentation](docs/FleetHacker-Overview.pptx) for the review workflow and an example of how verified matches reduce repeat work.
 
 Made by IT1 Charlie McPherson, IT1 Joshua Maulden, and IT2 Alexander Harris. **Made at FleetHacker 2026**.
 
@@ -62,6 +62,8 @@ ZIP previews and playback copies use a private temporary directory. The app chec
 
 Notes have a separate collapsible editor with bounded scrolling, so long text does not stretch review buttons. Unsaved item notes stay with their selection during the session.
 
+Scans save each file location's **Windows owner**, **owner SID**, **date created**, and **date modified**. Identical copies keep separate ownership and dates. Open **Details / notes**, select a recorded location and expand **File properties** to read the saved values, including when and where they were recorded. They remain available when the source is offline. Choose **Refresh file properties** for an existing unchanged file, or rescan its source folder. CSV/HTML review reports, case sheets and newly retained originals include the recorded properties. [Saved file properties](docs/File-Properties.md)
+
 In Inspect, press **Left** or **Right** to browse items on the current page, **Up** for Compliant, or **Down** for Non-compliant. Inspect advances to the next item on the page after a successful decision. Text fields and video controls keep their own keyboard behavior. Choose **Full screen** or press **F** or **F11** in Inspect or Quick Review. You can keep browsing and marking items in full screen. Press **Esc** to restore the window.
 
 Use **Undo** or **Ctrl+Z** to reverse a recent supported review from the current session. A batch is reversed together. If any selected item's saved review changed after that decision, the whole Undo is rejected and the newer edits are preserved.
@@ -77,6 +79,8 @@ To change pages, type a page number beside **Previous** and **Next**, then press
 The left sidebar holds the review queues, view modes, and database tools. Click the integrated border arrow at the middle of the sidebar’s right edge, the preview’s left edge, or the top controls’ bottom edge to collapse or reopen that section. The **View** dropdown remains available when the sidebar is closed. In List or Thumbnails, drag the thin preview divider immediately to the left of its arrow to resize the pane. You can also focus the divider with Tab and use the arrow keys. The app remembers the width when it closes.
 
 Use **Maintenance > Sources / reconnect** to check and apply a replacement folder for one root. **Reconnect all sources** automatically connects roots only when every checked file is a full match. Roots with candidate, missing or failed files remain available for explicit review in **Sources / reconnect**. **Preview tasks** shows the outcome for each item and lets you resume or discard unfinished work. **Export review report** offers CSV and offline HTML, with optional plaintext Evidence details after vault unlock. Select a Non-compliant item for its **Case sheet**, which keeps reviewer and Windows file owner distinct.
+
+Moved, deleted or inaccessible source files do not prevent classifying their saved records as **Non-compliant** or moving them into **Evidence**, including with **Select page**. Available verified originals are retained. When an original is unavailable, Evidence protects a historical snapshot of saved details and any available preview with the Supervisor password. A record can be retained even without a preview. Historical Evidence is clearly labeled **Original unavailable** and can be included in protected package exports and review reports. It cannot export an original file that was never retained. [Historical Evidence](docs/Historical-Evidence.md)
 
 If a reconnect points to a different folder, start a fresh scan there. **Resume** requires the original source for its saved manifest. When retrying a preview or retaining an original from a full SHA-256 card, the app can try another recorded copy if the preferred source is unavailable. Retention verifies the chosen copy's full SHA-256 before saving it.
 
